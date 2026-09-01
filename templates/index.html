@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>City ANPR - Municipal Intelligence Dashboard</title>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Chivo:wght@400;700;800;900&family=Hanken+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet"/>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "secondary": "#d72626",
+            "primary-fixed": "#f3f3f3",
+            "on-tertiary-fixed-variant": "#444444",
+            "tertiary-fixed-dim": "#eaeaea",
+            "on-primary-fixed-variant": "#444444",
+            "on-secondary": "#ffffff",
+            "on-tertiary-container": "#6d6d6d",
+            "on-error-container": "#93000a",
+            "inverse-on-surface": "#f4f4f4",
+            "surface-container-low": "#f7f7f7",
+            "surface-tint": "#666666",
+            "surface-container": "#f1f1f1",
+            "primary-container": "#1a1a1a",
+            "background": "#ffffff",
+            "secondary-fixed-dim": "#f7b0b0",
+            "on-secondary-container": "#ffffff",
+            "on-secondary-fixed": "#560000",
+            "on-primary": "#ffffff",
+            "outline-variant": "#d8d8d8",
+            "tertiary": "#111111",
+            "secondary-container": "#fbe3e3",
+            "on-tertiary-fixed": "#111111",
+            "tertiary-fixed": "#f4f4f4",
+            "error": "#ba1a1a",
+            "outline": "#a0a0a0",
+            "surface-bright": "#ffffff",
+            "surface-container-high": "#ebebeb",
+            "secondary-fixed": "#fdd9d9",
+            "primary": "#111111",
+            "inverse-primary": "#e5e5e5",
+            "primary-fixed-dim": "#e8e8e8",
+            "error-container": "#fff4f4",
+            "surface-container-lowest": "#ffffff",
+            "surface-variant": "#f5f5f5",
+            "on-tertiary": "#ffffff",
+            "tertiary-container": "#111111",
+            "surface": "#ffffff",
+            "on-secondary-fixed-variant": "#7a0000",
+            "on-primary-container": "#e7e7e7",
+            "on-error": "#ffffff",
+            "surface-container-highest": "#f2f2f2",
+            "on-background": "#111111",
+            "on-primary-fixed": "#111111",
+            "surface-dim": "#efefef",
+            "on-surface-variant": "#4d4d4d",
+            "on-surface": "#111111",
+            "inverse-surface": "#1d1d1d"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "0.75rem",
+            "full": "9999px"
+          },
+          "spacing": {
+            "margin": "32px",
+            "unit": "4px",
+            "stack-lg": "32px",
+            "stack-sm": "8px",
+            "gutter": "24px",
+            "stack-md": "16px",
+            "container-max": "1440px"
+          },
+          "fontFamily": {
+            "label-mono": ["JetBrains Mono"],
+            "body-md": ["Hanken Grotesk"],
+            "headline-lg-mobile": ["Chivo"],
+            "headline-md": ["Chivo"],
+            "metric-xl": ["Chivo"],
+            "display-lg": ["Chivo"],
+            "headline-lg": ["Chivo"],
+            "body-lg": ["Hanken Grotesk"]
+          },
+          "fontSize": {
+            "label-mono": ["13px", {"lineHeight": "1", "letterSpacing": "0.05em", "fontWeight": "600"}],
+            "body-md": ["16px", {"lineHeight": "1.5", "fontWeight": "400"}],
+            "headline-lg-mobile": ["24px", {"lineHeight": "1.2", "fontWeight": "800"}],
+            "headline-md": ["24px", {"lineHeight": "1.2", "fontWeight": "700"}],
+            "metric-xl": ["40px", {"lineHeight": "1", "letterSpacing": "-0.04em", "fontWeight": "900"}],
+            "display-lg": ["48px", {"lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "900"}],
+            "headline-lg": ["32px", {"lineHeight": "1.2", "fontWeight": "800"}],
+            "body-lg": ["18px", {"lineHeight": "1.5", "fontWeight": "500"}]
+          }
+        }
+      }
+    }
+</script>
+<link rel="stylesheet" href="/static/styles.css"/>
+</head>
+<body class="font-body-md text-body-md antialiased overflow-x-hidden bg-background text-on-background selection:bg-secondary selection:text-on-secondary">
+
+<!-- ========== SIDEBAR NAVIGATION ========== -->
+<nav class="fixed left-0 top-0 h-full flex flex-col p-5 bg-background w-52 border-r-2 border-primary z-50">
+    <div class="flex items-center gap-3 border-b border-primary pb-4 mb-6">
+        <div class="w-9 h-9 rounded-none bg-primary text-on-primary flex items-center justify-center">
+            <span class="material-symbols-outlined text-lg" style="font-variation-settings: 'FILL' 1;">shield</span>
+        </div>
+        <div>
+            <p class="font-label-mono text-[10px] uppercase tracking-[0.2em] text-on-surface-variant">ANPR</p>
+            <h1 class="font-headline-md text-lg font-black text-primary uppercase tracking-tight">City</h1>
+        </div>
+    </div>
+
+    <ul class="flex flex-col gap-2">
+        <li>
+            <a data-tab="dashboard" class="bg-secondary text-on-secondary font-bold border-2 border-primary flex items-center gap-3 px-3 py-2 uppercase tracking-wide cursor-pointer" href="#">
+                <span class="material-symbols-outlined text-base" style="font-variation-settings: 'FILL' 1;">dashboard</span>
+                Overview
+            </a>
+        </li>
+        <li>
+            <a data-tab="lookup" class="text-on-surface-variant hover:bg-surface-container-high flex items-center gap-3 px-3 py-2 border-2 border-transparent hover:border-primary uppercase tracking-wide cursor-pointer" href="#">
+                <span class="material-symbols-outlined text-base">search</span>
+                Lookup
+            </a>
+        </li>
+        <li>
+            <a data-tab="alerts" class="text-on-surface-variant hover:bg-surface-container-high flex items-center gap-3 px-3 py-2 border-2 border-transparent hover:border-primary uppercase tracking-wide cursor-pointer" href="#">
+                <span class="material-symbols-outlined text-base">notifications_active</span>
+                Alerts
+            </a>
+        </li>
+        <li>
+            <a data-tab="processing" class="text-on-surface-variant hover:bg-surface-container-high flex items-center gap-3 px-3 py-2 border-2 border-transparent hover:border-primary uppercase tracking-wide cursor-pointer" href="#">
+                <span class="material-symbols-outlined text-base">videocam</span>
+                Uploads
+            </a>
+        </li>
+    </ul>
+</nav>
+
+<!-- ========== TOP NAV BAR ========== -->
+<header class="fixed flex justify-between items-center h-16 px-5 ml-52 w-[calc(100%-13rem)] border-b-2 border-primary bg-surface z-40 top-0">
+    <div class="font-headline-md text-lg font-extrabold text-primary uppercase tracking-tight">
+        ANPR Intelligence
+    </div>
+    <div class="flex items-center gap-3">
+        <div class="relative hidden md:block w-56">
+            <input id="globalSearch" class="w-full bg-surface-container-lowest border border-primary p-2 pl-9 font-label-mono text-[11px] text-primary placeholder:text-outline focus:outline-none uppercase" placeholder="Search plate..." type="text"/>
+            <span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-primary text-sm">search</span>
+        </div>
+        <button id="headerBlacklistBtn" class="bg-primary text-on-primary font-label-mono text-[10px] uppercase px-3 py-2 border-2 border-primary hover:bg-secondary transition-colors cursor-pointer">
+            Blacklist
+        </button>
+    </div>
+</header>
+
+<!-- ========== MAIN CONTENT CANVAS ========== -->
+<main class="ml-52 w-[calc(100%-13rem)] min-h-screen pt-14 bg-background">
+
+    <!-- ==================== TAB: DASHBOARD ==================== -->
+    <div id="tab-dashboard" class="tab-content active">
+        <div class="p-4 max-w-6xl mx-auto">
+            <div class="flex justify-between items-center border-b border-primary pb-2 mb-4">
+                <h2 class="font-headline-md text-lg sm:text-xl uppercase tracking-tight text-primary">Overview</h2>
+                <div class="font-label-mono text-[10px] uppercase text-outline">
+                    Live • Just now
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+                <div class="border-2 border-primary bg-surface p-4">
+                    <div class="font-label-mono text-[10px] uppercase text-on-surface-variant pb-2 border-b border-primary">Detections</div>
+                    <div id="statTotalDetections" class="text-3xl font-black text-primary mt-3">0</div>
+                </div>
+                <div class="border-2 border-primary bg-surface p-4">
+                    <div class="font-label-mono text-[10px] uppercase text-on-surface-variant pb-2 border-b border-primary">Unique vehicles</div>
+                    <div id="statUniqueVehicles" class="text-3xl font-black text-primary mt-3">0</div>
+                </div>
+                <div class="border-2 border-primary bg-primary text-on-primary p-4">
+                    <div class="font-label-mono text-[10px] uppercase text-on-primary-container pb-2 border-b border-on-primary">Active cameras</div>
+                    <div class="flex items-center justify-between mt-3">
+                        <span id="statActiveCameras" class="text-3xl font-black">0</span>
+                        <span class="w-3 h-3 rounded-full bg-secondary"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-4">
+                <div class="border-2 border-primary bg-surface overflow-hidden">
+                    <div class="flex justify-between items-center border-b border-primary px-4 py-3">
+                        <h3 class="font-headline-md text-base uppercase">Detections over time</h3>
+                        <span class="font-label-mono text-[10px] uppercase text-outline">24h</span>
+                    </div>
+                    <div id="chartTimeline" class="p-4 min-h-[220px] bg-surface-container-low">
+                        <div class="absolute inset-0 grid grid-cols-6 border-l border-primary/20 pointer-events-none"></div>
+                    </div>
+                </div>
+
+                <div class="border-2 border-primary bg-surface overflow-hidden">
+                    <div class="border-b border-primary px-4 py-3">
+                        <h3 class="font-headline-md text-base uppercase text-center">Top cameras</h3>
+                    </div>
+                    <div id="chartCameras" class="p-4 space-y-3">
+                        <!-- Camera bars rendered by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-5 border-2 border-primary bg-surface overflow-hidden">
+                <div class="flex justify-between items-center border-b border-primary px-4 py-3 bg-primary text-on-primary">
+                    <h3 class="font-headline-md text-base uppercase">Recent activity</h3>
+                    <button class="font-label-mono text-[10px] uppercase underline">View all</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                        <tr class="bg-surface-container-high border-b border-primary font-label-mono text-[10px] uppercase text-on-surface-variant">
+                            <th class="p-3 border-r border-primary">Timestamp</th>
+                            <th class="p-3 border-r border-primary">Plate</th>
+                            <th class="p-3 border-r border-primary">Camera</th>
+                            <th class="p-3">Confidence</th>
+                        </tr>
+                        </thead>
+                        <tbody id="recentActivityBody" class="font-label-mono text-[11px]">
+                        <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TAB: VIDEO PROCESSING ==================== -->
+    <div id="tab-processing" class="tab-content">
+        <div class="p-gutter flex flex-col gap-gutter bg-surface-container-low min-h-[calc(100vh-4rem)]">
+            <!-- Page Header -->
+            <div class="flex justify-between items-end border-b-2 border-primary pb-stack-md">
+                <div>
+                    <h1 class="font-display-lg text-display-lg font-black text-primary uppercase">Async Pipeline</h1>
+                    <p class="font-label-mono text-label-mono text-primary/70 uppercase tracking-widest mt-2">Offline Video Intelligence Processing Node</p>
+                </div>
+                <div class="font-label-mono text-label-mono border-2 border-primary px-3 py-1 bg-surface-container shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                    NODE_STATUS: <span class="text-secondary font-bold">ONLINE</span>
+                </div>
+            </div>
+            <!-- Bento Grid Layout -->
+            <div class="grid grid-cols-12 gap-gutter items-start">
+                <!-- Left Column: Upload & Configuration (4 cols) -->
+                <div class="col-span-12 lg:col-span-4 flex flex-col gap-gutter sticky top-[calc(4rem+24px)]">
+                    <!-- Upload Section -->
+                    <div class="border-2 border-primary bg-surface p-gutter neo-brutalist-shadow flex flex-col gap-stack-md">
+                        <h2 class="font-headline-md text-headline-md font-bold text-primary uppercase border-b-2 border-primary pb-2 flex items-center gap-2">
+                            <span class="material-symbols-outlined">upload_file</span> Input Source
+                        </h2>
+                        <div id="fileDropzone" class="file-upload-zone border-2 border-dashed border-primary h-48 flex flex-col items-center justify-center cursor-pointer hover:bg-surface-container transition-colors group relative overflow-hidden">
+                            <div class="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                            <span class="material-symbols-outlined text-display-lg text-primary mb-2 group-hover:-translate-y-2 transition-transform duration-300">cloud_upload</span>
+                            <span class="font-label-mono text-label-mono text-primary font-bold uppercase text-center px-4">Drag & Drop Video File<br/><span class="text-xs opacity-60">MP4, AVI, MKV (Max 2GB)</span></span>
+                            <span id="selectedFileName" class="font-label-mono text-label-mono text-secondary font-bold mt-2"></span>
+                        </div>
+                        <input type="file" id="videoFileInput" accept="video/*" class="hidden"/>
+                        <button id="browseFilesBtn" class="w-full bg-primary text-on-primary font-label-mono text-label-mono font-bold uppercase border-2 border-primary py-3 neo-brutalist-shadow-hover neo-brutalist-shadow-active transition-all">
+                            Browse Local Files
+                        </button>
+                    </div>
+                    <!-- Camera Configuration & Settings -->
+                    <div class="border-2 border-primary bg-surface p-gutter neo-brutalist-shadow flex flex-col gap-stack-md">
+                        <h2 class="font-headline-md text-headline-md font-bold text-primary uppercase border-b-2 border-primary pb-2 flex items-center gap-2">
+                            <span class="material-symbols-outlined">settings_suggest</span> Node Config
+                        </h2>
+                        <!-- Camera Assignment -->
+                        <div class="flex flex-col gap-stack-sm border-2 border-primary p-4 bg-surface-container-lowest">
+                            <label class="font-label-mono text-label-mono font-bold text-primary uppercase">Virtual Camera Assignment</label>
+                            <select id="cameraSelect" class="w-full border-2 border-primary bg-surface p-2 font-label-mono text-label-mono focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all cursor-pointer appearance-none rounded-none">
+                                <option value="">-- Select Existing Source --</option>
+                            </select>
+                            <div class="text-center font-label-mono text-label-mono font-bold text-primary/50 text-xs py-1">OR</div>
+                            <input id="newCameraName" class="w-full border-2 border-primary bg-surface p-2 font-label-mono text-label-mono placeholder-primary/50 focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none" placeholder="NEW CAMERA NAME" type="text"/>
+                            <div class="flex gap-2">
+                                <input id="newCameraLat" class="w-1/2 border-2 border-primary bg-surface p-2 font-label-mono text-label-mono placeholder-primary/50 focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none" placeholder="LAT" type="text"/>
+                                <input id="newCameraLon" class="w-1/2 border-2 border-primary bg-surface p-2 font-label-mono text-label-mono placeholder-primary/50 focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all rounded-none" placeholder="LON" type="text"/>
+                            </div>
+                        </div>
+                        <!-- Processing Settings -->
+                        <div class="flex flex-col gap-stack-sm border-2 border-primary p-4 bg-surface-container-lowest mt-2">
+                            <label class="font-label-mono text-label-mono font-bold text-primary uppercase flex justify-between">
+                                Detection Confidence <span id="confValue">35%</span>
+                            </label>
+                            <input id="confSlider" class="w-full h-2 bg-primary/20 rounded-none appearance-none cursor-pointer accent-primary border-y border-primary" max="100" min="10" type="range" value="35"/>
+                            <label class="font-label-mono text-label-mono font-bold text-primary uppercase flex justify-between mt-4">
+                                OCR Every N Frames <span id="ocrValue">Every 3 Frames</span>
+                            </label>
+                            <input id="ocrSlider" class="w-full h-2 bg-primary/20 rounded-none appearance-none cursor-pointer accent-primary border-y border-primary" max="10" min="1" type="range" value="3"/>
+                        </div>
+                        <button id="enqueueJobBtn" class="w-full bg-secondary text-on-secondary font-headline-md text-headline-md !text-lg !font-bold uppercase border-2 border-primary py-4 neo-brutalist-shadow-hover neo-brutalist-shadow-active transition-all mt-4 flex items-center justify-center gap-2 tracking-wider">
+                            <span class="material-symbols-outlined">memory</span> Enqueue Job
+                        </button>
+                    </div>
+                </div>
+                <!-- Right Column: Job Tracker (8 cols) -->
+                <div class="col-span-12 lg:col-span-8 border-2 border-primary bg-surface p-gutter neo-brutalist-shadow flex flex-col min-h-[600px]">
+                    <div class="flex justify-between items-center border-b-2 border-primary pb-4 mb-4">
+                        <h2 class="font-headline-md text-headline-md font-bold text-primary uppercase flex items-center gap-2">
+                            <span class="material-symbols-outlined">format_list_bulleted</span> Job Queue Tracker
+                        </h2>
+                        <div class="flex gap-2">
+                            <button class="border-2 border-primary p-2 bg-surface hover:bg-surface-container-high transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"><span class="material-symbols-outlined text-[18px]">filter_alt</span></button>
+                            <button class="border-2 border-primary p-2 bg-surface hover:bg-surface-container-high transition-colors shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"><span class="material-symbols-outlined text-[18px]">refresh</span></button>
+                        </div>
+                    </div>
+                    <!-- Data Table -->
+                    <div class="w-full overflow-x-auto border-2 border-primary">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                            <tr class="bg-primary/10 border-b-2 border-primary font-label-mono text-label-mono text-primary uppercase">
+                                <th class="p-3 border-r-2 border-primary whitespace-nowrap">Job ID</th>
+                                <th class="p-3 border-r-2 border-primary whitespace-nowrap">Source</th>
+                                <th class="p-3 border-r-2 border-primary whitespace-nowrap w-32">Status</th>
+                                <th class="p-3 border-r-2 border-primary whitespace-nowrap w-48">Progress</th>
+                                <th class="p-3 text-center whitespace-nowrap w-24">Action</th>
+                            </tr>
+                            </thead>
+                            <tbody id="jobTrackerBody" class="font-label-mono text-label-mono">
+                            <!-- Jobs populated by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- Pagination Footer -->
+                    <div class="mt-auto pt-4 border-t-2 border-primary flex justify-between items-center font-label-mono text-label-mono">
+                        <span class="text-primary/70" id="jobCount">No jobs yet</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TAB: VEHICLE LOOKUP ==================== -->
+    <div id="tab-lookup" class="tab-content">
+        <div class="flex flex-col min-h-[calc(100vh-4rem)]">
+            <div class="flex-grow p-gutter grid grid-cols-12 gap-gutter bg-surface-container-low relative z-10">
+                <!-- Left Column: Search & Summary -->
+                <div class="col-span-12 lg:col-span-4 flex flex-col gap-gutter">
+                    <!-- Search Interface -->
+                    <div class="bg-surface border-heavy p-stack-md shadow-hard relative">
+                        <label class="block font-label-mono text-label-mono mb-stack-sm uppercase" for="plateSearchInput">Enter plate number</label>
+                        <div class="flex gap-2">
+                            <input class="flex-grow border-heavy px-4 py-3 font-headline-md text-headline-md bg-white focus:outline-none focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-shadow placeholder-outline uppercase" id="plateSearchInput" type="text" placeholder="MH12JC2813"/>
+                            <button onclick="lookupPlate()" class="bg-primary text-on-primary px-6 border-heavy shadow-hard shadow-hard-hover shadow-hard-active transition-all flex items-center justify-center">
+                                <span class="material-symbols-outlined text-headline-md font-bold">search</span>
+                            </button>
+                        </div>
+                    </div>
+                    <!-- Vehicle Summary Card -->
+                    <div id="vehicleStatusCard" class="bg-surface border-heavy shadow-hard flex flex-col">
+                        <div class="p-stack-md border-b-2 border-primary bg-surface-container-high">
+                            <div class="flex items-center gap-3">
+                                <span class="material-symbols-outlined text-primary text-display-lg">search</span>
+                                <div>
+                                    <p class="font-label-mono text-label-mono text-on-surface-variant uppercase">Search</p>
+                                    <h2 class="font-headline-md text-headline-md font-extrabold text-primary uppercase">Enter a plate to begin</h2>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="p-stack-md grid grid-cols-2 gap-4">
+                            <div class="border-heavy p-3 bg-surface-container">
+                                <p class="font-label-mono text-label-mono text-on-surface-variant uppercase mb-1">Sightings</p>
+                                <p class="font-metric-xl text-metric-xl text-primary">—</p>
+                            </div>
+                            <div class="border-heavy p-3 bg-surface-container">
+                                <p class="font-label-mono text-label-mono text-on-surface-variant uppercase mb-1">Cameras</p>
+                                <p class="font-metric-xl text-metric-xl text-primary">—</p>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Sightings Table -->
+                    <div class="bg-surface border-heavy shadow-hard flex-grow overflow-hidden flex flex-col">
+                        <div class="p-stack-md border-b-2 border-primary bg-primary text-on-primary">
+                            <h3 class="font-label-mono text-label-mono font-bold uppercase">Detection Log</h3>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                <tr class="bg-surface-container border-b-2 border-primary font-label-mono text-label-mono text-on-surface-variant uppercase">
+                                    <th class="p-3 border-r-2 border-primary">Timestamp</th>
+                                    <th class="p-3 border-r-2 border-primary">Camera Node</th>
+                                    <th class="p-3">Conf</th>
+                                </tr>
+                                </thead>
+                                <tbody id="detectionLogBody" class="font-label-mono text-label-mono">
+                                <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <!-- Right Column: Interactive Trajectory Map -->
+                <div class="col-span-12 lg:col-span-8 flex flex-col h-[800px] lg:h-auto">
+                    <div id="mapOuterContainer" class="bg-surface border-heavy shadow-hard flex-grow relative overflow-hidden group" style="min-height: 600px;">
+                        <!-- Zoomable Map Content Wrapper -->
+                        <div id="mapZoomLayer" class="absolute inset-0 transition-transform duration-300 ease-out" style="transform-origin: center center;">
+                            <!-- Map Background -->
+                            <div class="absolute inset-0 bg-cover bg-center grayscale opacity-80 z-0" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuACpDlhovMRcXK5OPQjCoLiDfMh-pkSfAVONymUdVpfxQQ1bPN658o7CZ3ned-xiTf7RuYhesQdaJ1tCvlr4cIUa7zpaZe5zn0p1pzBblVdCCUuKmxknAMSWhCCJMsQ5X8hu3V24aFgro-W7d_A0UUluhlxQ4bx087vYYF5K4px7P_ptZksmV8O6jaa__78nWlafgFPeQFtJv0KkkYSJewgu2NIPO78gWx6MdC672C_SipGqfxIOOda');"></div>
+                            <!-- Fallback grid if image fails -->
+                            <div class="absolute inset-0 bg-surface-container-low z-0">
+                                <div class="absolute inset-0 opacity-10" style="background-image: linear-gradient(#000 1px, transparent 1px), linear-gradient(90deg, #000 1px, transparent 1px); background-size: 50px 50px;"></div>
+                            </div>
+                            <!-- Trajectory Overlay (SVG) -->
+                            <svg class="absolute inset-0 w-full h-full z-10 pointer-events-none" preserveAspectRatio="none" viewBox="0 0 800 600">
+                                <path id="trajectorySvgPath" class="opacity-50" d="" fill="none" stroke="#000000" stroke-dasharray="8 8" stroke-width="4"></path>
+                                <path id="trajectorySvgPathAnimated" d="" fill="none" stroke="#b9100b" stroke-dasharray="1000" stroke-dashoffset="1000" stroke-width="4">
+                                    <animate attributeName="stroke-dashoffset" dur="3s" fill="freeze" from="1000" to="0"></animate>
+                                </path>
+                            </svg>
+                            <!-- Dynamic Node Markers -->
+                            <div id="trajectoryMapNodes" class="absolute inset-0 z-20">
+                                <!-- Nodes populated by JS -->
+                            </div>
+                        </div>
+                        <!-- Map Controls (outside zoom layer so they stay fixed) -->
+                        <div class="absolute top-4 right-4 z-30 flex flex-col gap-2">
+                            <button id="mapZoomIn" class="w-10 h-10 bg-surface border-heavy shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-y-0 active:shadow-none transition-all flex items-center justify-center">
+                                <span class="material-symbols-outlined font-bold">add</span>
+                            </button>
+                            <button id="mapZoomOut" class="w-10 h-10 bg-surface border-heavy shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-y-0 active:shadow-none transition-all flex items-center justify-center">
+                                <span class="material-symbols-outlined font-bold">remove</span>
+                            </button>
+                            <button id="mapReset" class="w-10 h-10 mt-2 bg-primary text-on-primary border-heavy shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-y-0 active:shadow-none transition-all flex items-center justify-center">
+                                <span class="material-symbols-outlined font-bold">my_location</span>
+                            </button>
+                        </div>
+                        <div class="absolute top-4 left-4 z-30 bg-surface border-heavy px-4 py-2 shadow-hard">
+                            <span id="trajectoryLabel" class="font-label-mono text-label-mono font-bold uppercase">Live Trajectory: —</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TAB: TRAFFIC HEATMAP ==================== -->
+    <div id="tab-heatmap" class="tab-content">
+        <div class="p-gutter flex flex-col gap-gutter bg-surface-container-low min-h-[calc(100vh-4rem)]">
+            <div class="flex justify-between items-end border-b-2 border-primary pb-stack-md">
+                <div>
+                    <h1 class="font-display-lg text-display-lg font-black text-primary uppercase">Traffic Heatmap</h1>
+                    <p class="font-label-mono text-label-mono text-primary/70 uppercase tracking-widest mt-2">Camera Network Detection Density</p>
+                </div>
+            </div>
+            <div id="heatmapContainer" class="flex-grow border-2 border-primary bg-surface neo-brutalist-shadow min-h-[600px]">
+                <!-- Camera grid rendered by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TAB: TOP ROUTES ==================== -->
+    <div id="tab-routes" class="tab-content">
+        <div class="p-gutter flex flex-col gap-gutter bg-surface-container-low min-h-[calc(100vh-4rem)]">
+            <div class="flex justify-between items-end border-b-2 border-primary pb-stack-md">
+                <div>
+                    <h1 class="font-display-lg text-display-lg font-black text-primary uppercase">Top Routes</h1>
+                    <p class="font-label-mono text-label-mono text-primary/70 uppercase tracking-widest mt-2">Inter-Camera Vehicle Flow Analytics</p>
+                </div>
+            </div>
+            <div class="border-2 border-primary bg-surface neo-brutalist-shadow overflow-hidden">
+                <div class="p-4 border-b-2 border-primary bg-primary text-on-primary flex justify-between items-center">
+                    <h3 class="font-headline-md text-headline-md uppercase tracking-widest">Route Transition Matrix</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                        <tr class="bg-surface-container-high border-b-2 border-primary font-label-mono text-label-mono text-on-surface-variant uppercase">
+                            <th class="p-4 border-r border-primary w-16">#</th>
+                            <th class="p-4 border-r border-primary">From</th>
+                            <th class="p-4 border-r border-primary w-16 text-center">→</th>
+                            <th class="p-4 border-r border-primary">To</th>
+                            <th class="p-4 border-r border-primary w-24">Trips</th>
+                            <th class="p-4 w-32">Avg Time</th>
+                        </tr>
+                        </thead>
+                        <tbody id="routesBody" class="font-label-mono text-label-mono">
+                        <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== TAB: ALERT CENTER ==================== -->
+    <div id="tab-alerts" class="tab-content">
+        <div class="flex-grow p-gutter md:p-margin bg-background">
+            <div class="mb-stack-lg">
+                <h2 class="font-display-lg text-display-lg font-black uppercase tracking-tighter text-primary">Alert Center</h2>
+                <p class="font-body-lg text-body-lg text-on-surface-variant mt-1 border-l-4 border-secondary pl-3">Real-time threat detection and active blacklist management.</p>
+            </div>
+            <!-- Grid Layout -->
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter items-start">
+                <!-- Left Col: Alert System (Span 8) -->
+                <div class="lg:col-span-8 space-y-stack-md">
+                    <div class="flex justify-between items-end mb-4 border-b-2 border-primary pb-2">
+                        <h3 class="font-headline-lg text-headline-lg font-bold uppercase tracking-tight flex items-center gap-2">
+                            <span class="material-symbols-outlined text-secondary text-3xl">emergency</span>
+                            Active Alerts
+                        </h3>
+                        <span id="unackAlertCount" class="font-label-mono text-label-mono bg-secondary text-on-secondary px-2 py-1 neo-shadow-sm neo-border">0 UNACKNOWLEDGED</span>
+                    </div>
+                    <div id="alertsContainer">
+                        <!-- Alert cards populated by JS -->
+                    </div>
+                </div>
+                <!-- Right Col: Blacklist Management (Span 4) -->
+                <div class="lg:col-span-4 space-y-stack-md">
+                    <div class="flex justify-between items-end mb-4 border-b-2 border-primary pb-2">
+                        <h3 class="font-headline-lg text-headline-lg font-bold uppercase tracking-tight flex items-center gap-2">
+                            <span class="material-symbols-outlined text-primary text-3xl">list_alt</span>
+                            Blacklist
+                        </h3>
+                    </div>
+                    <!-- Add to Blacklist Form -->
+                    <div class="bg-surface border-2 border-primary p-stack-md neo-shadow-sm">
+                        <h4 class="font-label-mono text-label-mono text-primary font-bold mb-4 flex items-center gap-2 uppercase">
+                            <span class="material-symbols-outlined text-sm">add_circle</span> Add New Target
+                        </h4>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="font-label-mono text-label-mono text-outline block text-xs mb-1">LICENSE PLATE</label>
+                                <input id="blacklistPlateInput" class="w-full border-2 border-primary bg-surface p-2 focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-shadow font-label-mono uppercase placeholder:text-outline-variant" placeholder="e.g. KA01AA1111" type="text"/>
+                            </div>
+                            <div>
+                                <label class="font-label-mono text-label-mono text-outline block text-xs mb-1">REASON CODE</label>
+                                <select id="blacklistReasonSelect" class="w-full border-2 border-primary bg-surface p-2 focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-shadow font-label-mono uppercase rounded-none">
+                                    <option>Warrant / Wanted</option>
+                                    <option>Stolen Vehicle</option>
+                                    <option>Suspended License</option>
+                                    <option>Custom Watchlist</option>
+                                </select>
+                            </div>
+                            <button onclick="addToBlacklist()" class="w-full bg-primary text-on-primary font-label-mono text-label-mono py-2 px-4 neo-border neo-shadow-sm hover-lift active-press transition-all uppercase mt-2" type="button">
+                                SUBMIT TO REGISTRY
+                            </button>
+                        </div>
+                    </div>
+                    <!-- Active Blacklist List -->
+                    <div class="bg-surface border-2 border-primary neo-shadow-sm">
+                        <div class="p-3 border-b-2 border-primary bg-surface-container-high">
+                            <h4 class="font-label-mono text-label-mono font-bold uppercase">Active Registry</h4>
+                        </div>
+                        <div id="blacklistList">
+                            <!-- Blacklist items populated by JS -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
