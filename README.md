@@ -36,8 +36,8 @@
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/Grim-235/SIH-2026.git
-cd SIH-2026
+git clone https://github.com/Grim-235/SIH2026-ALPR-System-.git
+cd SIH2026-ALPR-System-
 ```
 
 ### 2. Create Virtual Environment
