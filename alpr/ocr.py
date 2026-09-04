@@ -3,7 +3,82 @@ import re
 import cv2
 import numpy as np
 
+from dataclasses import dataclass
 from alpr.detector import PROJECT_CACHE_DIR
+
+
+@dataclass
+class PlateQualityGate:
+    """Configurable quality thresholds for accepting a plate crop for OCR."""
+    min_width: int = 80
+    min_height: int = 20
+    min_confidence: float = 0.45
+    min_sharpness: float = 20.0
+    min_quality_score: float = 0.20
+
+    def passes(self, quality: dict, detector_confidence: float) -> bool:
+        """Check if a plate detection passes quality criteria."""
+        if detector_confidence < self.min_confidence:
+            return False
+        if quality["width"] < self.min_width or quality["height"] < self.min_height:
+            return False
+        if quality["sharpness"] < self.min_sharpness:
+            return False
+        if quality["quality_score"] < self.min_quality_score:
+            return False
+        return True
+
+
+def assess_plate_quality(crop: np.ndarray) -> dict:
+    """
+    Assess the visual quality of a license plate crop image.
+
+    Returns:
+        dict: width, height, aspect_ratio, sharpness, brightness,
+              contrast, is_blurry, quality_score
+    """
+    if crop is None or crop.size == 0:
+        return {
+            "width": 0,
+            "height": 0,
+            "aspect_ratio": 0.0,
+            "sharpness": 0.0,
+            "brightness": 0.0,
+            "contrast": 0.0,
+            "is_blurry": True,
+            "quality_score": 0.0,
+        }
+
+    h, w = crop.shape[:2]
+    aspect_ratio = float(w) / float(max(1, h))
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+
+    # Sharpness via Laplacian variance
+    sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    # Brightness & contrast
+    brightness = float(np.mean(gray))
+    contrast = float(np.std(gray))
+
+    # Normalized component scores (0.0 to 1.0)
+    size_score = min(1.0, (w * h) / (160.0 * 40.0))
+    sharp_score = min(1.0, sharpness / 100.0)
+    contrast_score = min(1.0, contrast / 50.0)
+
+    quality_score = 0.40 * size_score + 0.40 * sharp_score + 0.20 * contrast_score
+    is_blurry = sharpness < 25.0
+
+    return {
+        "width": w,
+        "height": h,
+        "aspect_ratio": round(aspect_ratio, 2),
+        "sharpness": round(sharpness, 2),
+        "brightness": round(brightness, 2),
+        "contrast": round(contrast, 2),
+        "is_blurry": is_blurry,
+        "quality_score": round(quality_score, 3),
+    }
 
 
 INDIAN_STATE_CODES = {

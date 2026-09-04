@@ -34,7 +34,8 @@ import numpy as np
 
 from alpr.camera import CameraSource
 from alpr.detector import VehicleDetector, VehicleDetection
-from alpr.tracker import VehicleTracker, ActiveVehicleTrack, VehicleTrackState
+from alpr.tracker import VehicleTracker, ActiveVehicleTrack, VehicleTrackState, PlateRead
+from alpr.anpr import VehicleANPR
 
 # Configure logging
 logging.basicConfig(
@@ -61,8 +62,10 @@ class CameraWorker:
         reconnect_max_retries: int = 10,
         detector: Optional[VehicleDetector] = None,
         tracker: Optional[VehicleTracker] = None,
+        anpr: Optional[VehicleANPR] = None,
         on_detections: Optional[Callable[[str, np.ndarray, List[VehicleDetection], float, float], None]] = None,
         on_tracks: Optional[Callable[[str, np.ndarray, List[ActiveVehicleTrack], float, float], None]] = None,
+        on_plate_read: Optional[Callable[[str, int, PlateRead], None]] = None,
     ):
         """
         Initialize a camera worker.
@@ -74,8 +77,10 @@ class CameraWorker:
             reconnect_max_retries: Max reconnection attempts.
             detector: Optional VehicleDetector instance (for detection-only mode).
             tracker: Optional VehicleTracker instance (for tracking mode).
+            anpr: Optional VehicleANPR instance (for ANPR plate recognition mode).
             on_detections: Optional callback(camera_id, frame, detections, latency_ms, capture_ts).
             on_tracks: Optional callback(camera_id, frame, active_tracks, latency_ms, capture_ts).
+            on_plate_read: Optional callback(camera_id, track_id, plate_read).
         """
         self.camera_id = camera_id
         self.source = source
@@ -83,8 +88,10 @@ class CameraWorker:
         self.reconnect_max_retries = reconnect_max_retries
         self.detector = detector
         self.tracker = tracker
+        self.anpr = anpr
         self.on_detections = on_detections
         self.on_tracks = on_tracks
+        self.on_plate_read = on_plate_read
 
         self._running = False
         self._camera: Optional[CameraSource] = None
@@ -94,6 +101,7 @@ class CameraWorker:
         # Performance & detection metrics
         self.frames_processed = 0
         self.vehicles_detected = 0
+        self.plates_detected = 0
         self._latencies: deque = deque(maxlen=30)
         self._proc_times: deque = deque(maxlen=30)
         self._vehicle_counts: deque = deque(maxlen=30)
@@ -214,6 +222,25 @@ class CameraWorker:
                         self._proc_times.append(time.time())
                         self._vehicle_counts.append(len(active_tracks))
 
+                        # ── Stage: ANPR (Phase 4) ──
+                        if self.anpr is not None:
+                            for trk in active_tracks:
+                                state = self.tracker.active_tracks.get(trk.track_id)
+                                if state:
+                                    read = self.anpr.process_track(
+                                        frame,
+                                        state,
+                                        frame_number=cam.frames_read,
+                                        timestamp=capture_ts,
+                                    )
+                                    if read:
+                                        self.plates_detected += 1
+                                        if self.on_plate_read:
+                                            try:
+                                                self.on_plate_read(self.camera_id, trk.track_id, read)
+                                            except Exception as cb_err:
+                                                logger.error(f"[{self.camera_id}] ANPR callback error: {cb_err}")
+
                         if self.on_tracks:
                             try:
                                 self.on_tracks(
@@ -329,6 +356,15 @@ class CameraWorker:
 
             if self.tracker is not None:
                 metrics = self.tracker.get_metrics()
+                plate_str = ""
+                if self.anpr is not None:
+                    canonical_plates = [
+                        f"#{s.track_id}:{s.canonical_plate}"
+                        for s in self.tracker.active_tracks.values()
+                        if s.canonical_plate
+                    ]
+                    plate_str = f" | plates_read={self.plates_detected} | canonical={canonical_plates}"
+
                 logger.info(
                     f"[{self.camera_id}] "
                     f"status={self.status:<7} | "
@@ -338,6 +374,7 @@ class CameraWorker:
                     f"active_tracks={metrics['active_tracks']:<2} | "
                     f"total_tracks={metrics['tracks_created']:<3} | "
                     f"avg_len={metrics['avg_track_length']:4.1f}f"
+                    f"{plate_str}"
                 )
             elif self.detector is not None:
                 logger.info(
@@ -405,8 +442,12 @@ class MultiCameraManager:
         conf: float = 0.35,
         iou: float = 0.5,
         device: str = "auto",
+        anpr_enabled: bool = False,
+        plate_model_path: str = "data/models/license_plate_yolov8_best.pt",
+        ocr_every_n: int = 3,
         on_detections: Optional[Callable] = None,
         on_tracks: Optional[Callable] = None,
+        on_plate_read: Optional[Callable] = None,
     ) -> None:
         """
         Start workers for all cameras in the config.
@@ -421,13 +462,26 @@ class MultiCameraManager:
             conf: Confidence threshold.
             iou: NMS IoU threshold.
             device: Compute device.
+            anpr_enabled: Whether to attach VehicleANPR to tracked vehicles.
+            plate_model_path: Path to plate detector weights.
+            ocr_every_n: Process OCR every N frames per vehicle track.
             on_detections: Optional detection callback.
             on_tracks: Optional tracking callback.
+            on_plate_read: Optional ANPR plate read callback.
         """
         cameras = self.load_cameras(config_path)
         if not cameras:
             logger.error("No cameras found in config.")
             return
+
+        shared_anpr = None
+        if anpr_enabled:
+            logger.info(f"Initializing VehicleANPR with plate model: {plate_model_path}...")
+            shared_anpr = VehicleANPR(
+                plate_model_path=plate_model_path,
+                device=device,
+                ocr_every_n=ocr_every_n,
+            )
 
         for cam in cameras:
             cam_id = cam.get("camera_id")
@@ -447,10 +501,11 @@ class MultiCameraManager:
 
             # Initialize tracker for this camera if requested
             worker_tracker = None
-            if tracker_type:
+            if tracker_type or anpr_enabled:
+                t_type = tracker_type or "bytetrack.yaml"
                 worker_tracker = VehicleTracker(
                     model_path=model_path,
-                    tracker_type=tracker_type,
+                    tracker_type=t_type,
                     conf=conf,
                     iou=iou,
                     device=device,
@@ -463,8 +518,10 @@ class MultiCameraManager:
                 fps_target=float(fps_target),
                 detector=detector if not worker_tracker else None,
                 tracker=worker_tracker,
+                anpr=shared_anpr,
                 on_detections=on_detections,
                 on_tracks=on_tracks,
+                on_plate_read=on_plate_read,
             )
             self.workers[cam_id] = worker
 
@@ -477,7 +534,9 @@ class MultiCameraManager:
 
         # Print startup summary
         print(f"\n{'='*75}")
-        if tracker_type:
+        if anpr_enabled:
+            mode_str = f"Full ANPR Pipeline (Tracking + Plate Detector + OCR)"
+        elif tracker_type:
             mode_str = f"Vehicle Tracking ({tracker_type})"
         elif detector:
             mode_str = "Vehicle Detection Only"
@@ -591,6 +650,25 @@ def main():
         help="Tracker backend: bytetrack.yaml or botsort.yaml (default: bytetrack.yaml)",
     )
 
+    # Phase 4: ANPR Pipeline flags
+    parser.add_argument(
+        "--anpr",
+        action="store_true",
+        help="Enable full ANPR pipeline (Vehicle Tracking + Plate Detection + OCR)",
+    )
+    parser.add_argument(
+        "--plate-model",
+        type=str,
+        default="data/models/license_plate_yolov8_best.pt",
+        help="Path to plate detector model weights",
+    )
+    parser.add_argument(
+        "--ocr-every-n",
+        type=int,
+        default=3,
+        help="Process OCR every N frames per vehicle track (default: 3)",
+    )
+
     parser.add_argument(
         "--model",
         type=str,
@@ -637,8 +715,26 @@ def main():
 
     tracker = None
     detector = None
+    anpr = None
 
-    if args.track:
+    if args.anpr:
+        logger.info(f"Initializing full ANPR Pipeline (Tracking + Plate Detection + OCR)...")
+        if args.source:
+            tracker = VehicleTracker(
+                model_path=args.model,
+                tracker_type=args.tracker_type,
+                conf=args.conf,
+                iou=args.iou,
+                imgsz=args.imgsz,
+                device=args.device,
+                camera_id=args.camera_id,
+            )
+            anpr = VehicleANPR(
+                plate_model_path=args.plate_model,
+                device=args.device,
+                ocr_every_n=args.ocr_every_n,
+            )
+    elif args.track:
         logger.info(f"Initializing VehicleTracker with {args.tracker_type}...")
         if args.source:
             tracker = VehicleTracker(
@@ -667,6 +763,7 @@ def main():
             fps_target=args.fps,
             detector=detector,
             tracker=tracker,
+            anpr=anpr,
         )
         worker._stats_interval = args.stats_interval
         worker.start()
@@ -677,11 +774,14 @@ def main():
             args.config,
             use_stream=not args.direct,
             detector=detector,
-            tracker_type=args.tracker_type if args.track else None,
+            tracker_type=args.tracker_type if (args.track or args.anpr) else None,
             model_path=args.model,
             conf=args.conf,
             iou=args.iou,
             device=args.device,
+            anpr_enabled=args.anpr,
+            plate_model_path=args.plate_model,
+            ocr_every_n=args.ocr_every_n,
         )
 
 

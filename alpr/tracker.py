@@ -21,6 +21,20 @@ from alpr.detector import (
     resolve_device,
     DEFAULT_VEHICLE_MODEL_PATH,
 )
+from alpr.ocr import is_probable_indian_plate
+
+
+@dataclass
+class PlateRead:
+    """Individual OCR observation for a tracked vehicle."""
+    text: str
+    ocr_confidence: float
+    detector_confidence: float
+    quality_score: float
+    frame_number: int
+    timestamp: float
+    plate_bbox: Tuple[int, int, int, int]  # (x1, y1, x2, y2) in full-frame coordinates
+    is_valid_indian: bool = False
 
 
 @dataclass
@@ -44,6 +58,51 @@ class VehicleTrackState:
 
     best_vehicle_crop: Optional[np.ndarray] = None
     best_crop_quality: float = 0.0
+
+    # Phase 4: License plate recognition & consensus
+    plate_reads: List[PlateRead] = field(default_factory=list)
+    best_plate_crop: Optional[np.ndarray] = None
+    best_plate_quality: float = 0.0
+    canonical_plate: Optional[str] = None
+    plate_confidence: float = 0.0
+
+    def add_plate_read(
+        self,
+        read: PlateRead,
+        plate_crop: Optional[np.ndarray] = None,
+    ) -> None:
+        """Add an OCR observation and update canonical plate consensus."""
+        self.plate_reads.append(read)
+        if plate_crop is not None and read.quality_score > self.best_plate_quality:
+            self.best_plate_crop = plate_crop.copy()
+            self.best_plate_quality = read.quality_score
+        self.compute_plate_consensus()
+
+    def compute_plate_consensus(self) -> Optional[Tuple[str, float]]:
+        """
+        Compute consensus plate text from multiple OCR reads using
+        confidence-weighted majority voting with Indian plate preference.
+        """
+        if not self.plate_reads:
+            return None
+
+        # Prefer valid Indian plates if any exist
+        valid_reads = [r for r in self.plate_reads if r.is_valid_indian or is_probable_indian_plate(r.text)]
+        reads_to_use = valid_reads if valid_reads else self.plate_reads
+
+        # Score text candidates: sum of (ocr_conf * quality_score)
+        scores: Dict[str, float] = {}
+        for r in reads_to_use:
+            weight = r.ocr_confidence * max(0.2, r.quality_score)
+            scores[r.text] = scores.get(r.text, 0.0) + weight
+
+        best_text = max(scores, key=scores.get)
+        matching_confs = [r.ocr_confidence for r in reads_to_use if r.text == best_text]
+        best_conf = max(matching_confs) if matching_confs else 0.0
+
+        self.canonical_plate = best_text
+        self.plate_confidence = float(best_conf)
+        return best_text, self.plate_confidence
 
     @property
     def latest_bbox(self) -> Optional[Tuple[int, int, int, int]]:
@@ -369,8 +428,12 @@ class VehicleTracker:
             # Bounding box
             cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
 
-            # Header label: VEHICLE_TYPE #ID (confidence)
-            label = f"{track.vehicle_type.upper()} #{track.track_id} ({track.confidence:.2f})"
+            # Header label: VEHICLE_TYPE #ID | PLATE (confidence)
+            state = self.active_tracks.get(track.track_id)
+            if state and state.canonical_plate:
+                label = f"{track.vehicle_type.upper()} #{track.track_id} | {state.canonical_plate} ({state.plate_confidence:.2f})"
+            else:
+                label = f"{track.vehicle_type.upper()} #{track.track_id} ({track.confidence:.2f})"
             (lw, lh), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             cv2.rectangle(
                 out,

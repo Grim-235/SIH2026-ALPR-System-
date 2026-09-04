@@ -7,9 +7,17 @@ from alpr.detector import (
     VehicleDetection,
     VEHICLE_CLASS_MAP,
 )
-from alpr.ocr import load_ocr, recognize_plate, is_probable_indian_plate
+from alpr.ocr import (
+    load_ocr,
+    recognize_plate,
+    is_probable_indian_plate,
+    PlateQualityGate,
+    assess_plate_quality,
+)
 from alpr.tracker import (
     VehicleTracker,
     VehicleTrackState,
     ActiveVehicleTrack,
+    PlateRead,
 )
+from alpr.anpr import VehicleANPR
