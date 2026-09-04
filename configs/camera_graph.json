@@ -1,0 +1,32 @@
+{
+    "CAM-001": {
+        "neighbors": ["CAM-002", "CAM-003"],
+        "distances_km": {
+            "CAM-002": 6.5,
+            "CAM-003": 10.5
+        }
+    },
+    "CAM-002": {
+        "neighbors": ["CAM-001", "CAM-003", "CAM-004"],
+        "distances_km": {
+            "CAM-001": 6.5,
+            "CAM-003": 12.8,
+            "CAM-004": 14.2
+        }
+    },
+    "CAM-003": {
+        "neighbors": ["CAM-001", "CAM-002", "CAM-004"],
+        "distances_km": {
+            "CAM-001": 10.5,
+            "CAM-002": 12.8,
+            "CAM-004": 10.8
+        }
+    },
+    "CAM-004": {
+        "neighbors": ["CAM-002", "CAM-003"],
+        "distances_km": {
+            "CAM-002": 14.2,
+            "CAM-003": 10.8
+        }
+    }
+}

@@ -101,6 +101,10 @@ def process_video_job(
 
         # Process video
         print(f"[{job_id}] Processing video with tracking...")
+        def on_progress(cur_f: int, tot_f: int):
+            pct = int(15 + (cur_f / max(1, tot_f)) * 70)
+            update_job_progress(conn, job_id, min(85, pct), 0)
+
         detections = process_video_with_tracking(
             model=model,
             reader=reader,
@@ -113,6 +117,7 @@ def process_video_job(
             max_frames=max(0, max_frames),
             show=False,
             output_video=out_video,
+            progress_callback=on_progress,
         )
 
         print(f"[{job_id}] Found {len(detections)} unique vehicles")

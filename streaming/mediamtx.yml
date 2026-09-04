@@ -1,0 +1,36 @@
+# MediaMTX configuration for ALPR multi-camera streaming
+# Documentation: https://github.com/bluenviron/mediamtx
+
+###############################################
+# Global settings
+###############################################
+logLevel: info
+logDestinations: [stdout]
+
+###############################################
+# RTSP server
+###############################################
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+
+###############################################
+# Disable unused protocols
+###############################################
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+
+###############################################
+# Paths (stream endpoints)
+###############################################
+paths:
+  cam01:
+  cam02:
+  cam03:
+  cam04:
+  all_others:

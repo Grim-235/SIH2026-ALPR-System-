@@ -1,0 +1,58 @@
+[
+    {
+        "camera_id": "CAM-001",
+        "name": "MG Road Junction",
+        "latitude": 12.9756,
+        "longitude": 77.6062,
+        "description": "MG Road and Brigade Road intersection",
+        "stream_url": "rtsp://localhost:8554/cam01",
+        "video": "inputs/cam01.mp4",
+        "protocol": "rtsp",
+        "fps": 10,
+        "resolution": "1280x720",
+        "status": "unknown",
+        "last_seen": null
+    },
+    {
+        "camera_id": "CAM-002",
+        "name": "Silk Board Junction",
+        "latitude": 12.9177,
+        "longitude": 77.6233,
+        "description": "Silk Board flyover entry point",
+        "stream_url": "rtsp://localhost:8554/cam02",
+        "video": "inputs/cam02.mp4",
+        "protocol": "rtsp",
+        "fps": 10,
+        "resolution": "1280x720",
+        "status": "unknown",
+        "last_seen": null
+    },
+    {
+        "camera_id": "CAM-003",
+        "name": "KR Puram Bridge",
+        "latitude": 13.0073,
+        "longitude": 77.6964,
+        "description": "KR Puram railway bridge overpass",
+        "stream_url": "rtsp://localhost:8554/cam03",
+        "video": "inputs/cam03.mp4",
+        "protocol": "rtsp",
+        "fps": 10,
+        "resolution": "1280x720",
+        "status": "unknown",
+        "last_seen": null
+    },
+    {
+        "camera_id": "CAM-004",
+        "name": "Hebbal Flyover",
+        "latitude": 13.0358,
+        "longitude": 77.5970,
+        "description": "Hebbal flyover north entry",
+        "stream_url": "rtsp://localhost:8554/cam04",
+        "video": "inputs/cam04.mp4",
+        "protocol": "rtsp",
+        "fps": 10,
+        "resolution": "1280x720",
+        "status": "unknown",
+        "last_seen": null
+    }
+]
