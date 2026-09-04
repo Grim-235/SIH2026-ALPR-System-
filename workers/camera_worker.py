@@ -1,5 +1,5 @@
 """
-Camera Worker — per-camera stream processing and pipeline orchestrator.
+Camera Worker -- per-camera stream processing and pipeline orchestrator.
 
 Connects to a video source via CameraSource, reads frames in a loop,
 runs single-camera vehicle tracking (Phase 3) or detection (Phase 2),
@@ -28,7 +28,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import numpy as np
 
@@ -37,6 +37,17 @@ from alpr.detector import VehicleDetector, VehicleDetection
 from alpr.tracker import VehicleTracker, ActiveVehicleTrack, VehicleTrackState, PlateRead
 from alpr.anpr import VehicleANPR
 from alpr.reid import VehicleReID
+from alpr.identity import (
+    GlobalIdentityResolver,
+    GlobalVehicleIdentity,
+    VehicleObservation,
+    IdentityMatchResult,
+)
+from alpr.database import (
+    init_db,
+    save_global_identity,
+    record_vehicle_observation,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -66,17 +77,20 @@ class CameraWorker:
         anpr: Optional[VehicleANPR] = None,
         reid: Optional[VehicleReID] = None,
         reid_every_n: int = 15,
+        identity_resolver: Optional[GlobalIdentityResolver] = None,
+        db_path: Optional[Union[str, Path]] = None,
         on_detections: Optional[Callable[[str, np.ndarray, List[VehicleDetection], float, float], None]] = None,
         on_tracks: Optional[Callable[[str, np.ndarray, List[ActiveVehicleTrack], float, float], None]] = None,
         on_plate_read: Optional[Callable[[str, int, PlateRead], None]] = None,
         on_reid_extracted: Optional[Callable[[str, int, np.ndarray], None]] = None,
+        on_global_identity_resolved: Optional[Callable[[str, GlobalVehicleIdentity, IdentityMatchResult], None]] = None,
     ):
         """
         Initialize a camera worker.
 
         Args:
             camera_id: Logical camera identifier (e.g., 'CAM-001').
-            source: Video source — RTSP URL, file path, or webcam index.
+            source: Video source -- RTSP URL, file path, or webcam index.
             fps_target: Target FPS for throttling (0 = no throttle).
             reconnect_max_retries: Max reconnection attempts.
             detector: Optional VehicleDetector instance (for detection-only mode).
@@ -84,10 +98,13 @@ class CameraWorker:
             anpr: Optional VehicleANPR instance (for ANPR plate recognition mode).
             reid: Optional VehicleReID instance (for visual appearance ReID).
             reid_every_n: Throttle interval for representative ReID feature extraction.
+            identity_resolver: Optional GlobalIdentityResolver instance for multi-camera tracking.
+            db_path: Optional path to SQLite database for persisting global identities.
             on_detections: Optional callback(camera_id, frame, detections, latency_ms, capture_ts).
             on_tracks: Optional callback(camera_id, frame, active_tracks, latency_ms, capture_ts).
             on_plate_read: Optional callback(camera_id, track_id, plate_read).
             on_reid_extracted: Optional callback(camera_id, track_id, embedding).
+            on_global_identity_resolved: Optional callback(camera_id, identity, result).
         """
         self.camera_id = camera_id
         self.source = source
@@ -98,10 +115,13 @@ class CameraWorker:
         self.anpr = anpr
         self.reid = reid
         self.reid_every_n = reid_every_n
+        self.identity_resolver = identity_resolver
+        self.db_path = db_path
         self.on_detections = on_detections
         self.on_tracks = on_tracks
         self.on_plate_read = on_plate_read
         self.on_reid_extracted = on_reid_extracted
+        self.on_global_identity_resolved = on_global_identity_resolved
 
         self._running = False
         self._camera: Optional[CameraSource] = None
@@ -113,6 +133,7 @@ class CameraWorker:
         self.vehicles_detected = 0
         self.plates_detected = 0
         self.reid_extractions = 0
+        self.identities_resolved = 0
         self._latencies: deque = deque(maxlen=30)
         self._proc_times: deque = deque(maxlen=30)
         self._vehicle_counts: deque = deque(maxlen=30)
@@ -166,6 +187,42 @@ class CameraWorker:
             return 0.0
         return sum(self._vehicle_counts) / len(self._vehicle_counts)
 
+    def _process_finalized_track(self, trk: VehicleTrackState) -> None:
+        """Process a finalized vehicle track through identity resolution and database persistence."""
+        if self.identity_resolver is None:
+            return
+
+        obs = VehicleObservation(
+            camera_id=self.camera_id,
+            track_id=trk.track_id,
+            timestamp=trk.last_timestamp,  # Capture timestamp of vehicle track exit
+            vehicle_type=trk.vehicle_type,
+            canonical_plate=trk.canonical_plate,
+            plate_confidence=trk.plate_confidence,
+            best_reid_embedding=trk.best_reid_embedding,
+            crop_quality=trk.best_crop_quality,
+            bbox=trk.latest_bbox,
+        )
+
+        identity, result = self.identity_resolver.resolve_observation(obs)
+        self.identities_resolved += 1
+
+        if self.db_path:
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+                save_global_identity(conn, identity)
+                record_vehicle_observation(conn, obs, result, first_timestamp=trk.first_timestamp)
+                conn.close()
+            except Exception as e:
+                logger.error(f"[{self.camera_id}] Error saving identity to DB: {e}")
+
+        if self.on_global_identity_resolved:
+            try:
+                self.on_global_identity_resolved(self.camera_id, identity, result)
+            except Exception as cb_err:
+                logger.error(f"[{self.camera_id}] Global identity callback error: {cb_err}")
+
     def start(self) -> None:
         """
         Main processing loop.
@@ -181,7 +238,7 @@ class CameraWorker:
         else:
             mode_desc = "frame ingestion only"
 
-        logger.info(f"[{self.camera_id}] Worker starting ({mode_desc}) — source: {self.source}")
+        logger.info(f"[{self.camera_id}] Worker starting ({mode_desc}) -- source: {self.source}")
 
         self._camera = CameraSource(
             source=self.source,
@@ -284,6 +341,11 @@ class CameraWorker:
                                                 except Exception as cb_err:
                                                     logger.error(f"[{self.camera_id}] ReID callback error: {cb_err}")
 
+                        # ── Stage: Finalized Track Identity Resolution (Phase 6B) ──
+                        finalized_in_step = self.tracker.pop_finalized_tracks()
+                        for trk_state in finalized_in_step:
+                            self._process_finalized_track(trk_state)
+
                         if self.on_tracks:
                             try:
                                 self.on_tracks(
@@ -360,8 +422,14 @@ class CameraWorker:
 
         if self.tracker:
             finalized = self.tracker.finalize_all()
+            # Process remaining finalized tracks through identity resolution
+            rem_finalized = self.tracker.pop_finalized_tracks()
+            for trk_state in rem_finalized:
+                self._process_finalized_track(trk_state)
+
             metrics = self.tracker.get_metrics()
             reid_info = f", reid_extracted={self.reid_extractions}" if self.reid else ""
+            id_info = f", identities_resolved={self.identities_resolved}" if self.identity_resolver else ""
             logger.info(
                 f"[{self.camera_id}] Worker stopped. "
                 f"read={read_cnt}, proc={self.frames_processed}, "
@@ -369,7 +437,7 @@ class CameraWorker:
                 f"tracks_finalized={len(finalized)}, "
                 f"avg_track_len={metrics['avg_track_length']:.1f}f, "
                 f"in_fps={in_fps:.1f}, infer_fps={self.inference_fps:.1f}, "
-                f"avg_latency={self.avg_latency_ms:.1f}ms{reid_info}"
+                f"avg_latency={self.avg_latency_ms:.1f}ms{reid_info}{id_info}"
             )
         elif self.detector:
             logger.info(
@@ -498,10 +566,14 @@ class MultiCameraManager:
         reid_enabled: bool = False,
         reid_weights: Optional[str] = None,
         reid_every_n: int = 15,
+        identity_resolver: Optional[GlobalIdentityResolver] = None,
+        resolve_identity: bool = False,
+        db_path: Optional[str] = None,
         on_detections: Optional[Callable] = None,
         on_tracks: Optional[Callable] = None,
         on_plate_read: Optional[Callable] = None,
         on_reid_extracted: Optional[Callable] = None,
+        on_global_identity_resolved: Optional[Callable] = None,
     ) -> None:
         """
         Start workers for all cameras in the config.
@@ -522,10 +594,14 @@ class MultiCameraManager:
             reid_enabled: Whether to attach VehicleReID feature extractor.
             reid_weights: Optional path to custom ReID weights (.pth / .pt).
             reid_every_n: Process ReID every N frames per vehicle track.
+            identity_resolver: Shared GlobalIdentityResolver instance.
+            resolve_identity: If True, resolves global identity for finalized tracks.
+            db_path: Optional path to SQLite database.
             on_detections: Optional detection callback.
             on_tracks: Optional tracking callback.
             on_plate_read: Optional ANPR plate read callback.
             on_reid_extracted: Optional ReID extraction callback.
+            on_global_identity_resolved: Optional global identity callback.
         """
         cameras = self.load_cameras(config_path)
         if not cameras:
@@ -546,6 +622,15 @@ class MultiCameraManager:
             logger.info("Initializing VehicleReID feature extractor...")
             shared_reid = VehicleReID(weights_path=reid_weights, device=device)
 
+        shared_resolver = identity_resolver
+        if resolve_identity and shared_resolver is None:
+            logger.info("Initializing GlobalIdentityResolver for multi-camera tracking...")
+            shared_resolver = GlobalIdentityResolver()
+
+        if db_path and resolve_identity:
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            init_db(db_path)
+
         for cam in cameras:
             cam_id = cam.get("camera_id")
             if not cam_id:
@@ -564,7 +649,7 @@ class MultiCameraManager:
 
             # Initialize tracker for this camera if requested
             worker_tracker = None
-            if tracker_type or anpr_enabled or reid_enabled:
+            if tracker_type or anpr_enabled or reid_enabled or resolve_identity:
                 t_type = tracker_type or "bytetrack.yaml"
                 worker_tracker = VehicleTracker(
                     model_path=model_path,
@@ -584,10 +669,13 @@ class MultiCameraManager:
                 anpr=shared_anpr,
                 reid=shared_reid,
                 reid_every_n=reid_every_n,
+                identity_resolver=shared_resolver,
+                db_path=db_path,
                 on_detections=on_detections,
                 on_tracks=on_tracks,
                 on_plate_read=on_plate_read,
                 on_reid_extracted=on_reid_extracted,
+                on_global_identity_resolved=on_global_identity_resolved,
             )
             self.workers[cam_id] = worker
 
@@ -656,7 +744,7 @@ class MultiCameraManager:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Camera Worker — multi-camera ingestion, vehicle detection & tracking"
+        description="Camera Worker -- multi-camera ingestion, vehicle detection & tracking"
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
@@ -754,6 +842,19 @@ def main():
         help="Extract ReID embedding at most every N frames per track on crop improvement (default: 15)",
     )
 
+    # Phase 6B: Global Identity Resolution flags
+    parser.add_argument(
+        "--resolve-identity",
+        action="store_true",
+        help="Enable multi-camera global vehicle identity resolution and database persistence (Phase 6B)",
+    )
+    parser.add_argument(
+        "--db-path",
+        type=str,
+        default="data/alpr.db",
+        help="Path to SQLite database for persisting global vehicle identities (default: data/alpr.db)",
+    )
+
     parser.add_argument(
         "--model",
         type=str,
@@ -802,6 +903,13 @@ def main():
     detector = None
     anpr = None
     reid = None
+    identity_resolver = None
+
+    if args.resolve_identity:
+        logger.info("Initializing GlobalIdentityResolver for multi-camera tracking...")
+        identity_resolver = GlobalIdentityResolver()
+        Path(args.db_path).parent.mkdir(parents=True, exist_ok=True)
+        init_db(args.db_path)
 
     if args.reid:
         logger.info("Initializing VehicleReID feature extractor...")
@@ -827,7 +935,7 @@ def main():
                 device=args.device,
                 ocr_every_n=args.ocr_every_n,
             )
-    elif args.track or args.reid:
+    elif args.track or args.reid or args.resolve_identity:
         logger.info(f"Initializing VehicleTracker with {args.tracker_type}...")
         if args.source:
             tracker = VehicleTracker(
@@ -859,6 +967,8 @@ def main():
             anpr=anpr,
             reid=reid,
             reid_every_n=args.reid_every_n,
+            identity_resolver=identity_resolver,
+            db_path=args.db_path if args.resolve_identity else None,
         )
         worker._stats_interval = args.stats_interval
         worker.start()
@@ -869,7 +979,7 @@ def main():
             args.config,
             use_stream=not args.direct,
             detector=detector,
-            tracker_type=args.tracker_type if (args.track or args.anpr or args.reid) else None,
+            tracker_type=args.tracker_type if (args.track or args.anpr or args.reid or args.resolve_identity) else None,
             model_path=args.model,
             conf=args.conf,
             iou=args.iou,
@@ -880,7 +990,11 @@ def main():
             reid_enabled=args.reid,
             reid_weights=args.reid_weights,
             reid_every_n=args.reid_every_n,
+            identity_resolver=identity_resolver,
+            resolve_identity=args.resolve_identity,
+            db_path=args.db_path if args.resolve_identity else None,
         )
+
 
 
 

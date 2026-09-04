@@ -34,3 +34,11 @@ from alpr.identity import (
     GlobalIdentityResolver,
     compute_plate_similarity,
 )
+from alpr.database import (
+    init_db,
+    save_global_identity,
+    record_vehicle_observation,
+    get_global_vehicle,
+    get_vehicle_trajectory,
+    get_all_global_vehicles,
+)

@@ -1,6 +1,9 @@
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import numpy as np
 
 
 def init_db(db_path: str | Path) -> sqlite3.Connection:
@@ -78,6 +81,56 @@ def init_db(db_path: str | Path) -> sqlite3.Connection:
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS global_vehicles (
+            global_id               TEXT PRIMARY KEY,
+            canonical_plate         TEXT,
+            plate_confidence        REAL,
+            vehicle_type            TEXT NOT NULL,
+            first_seen_ts           REAL NOT NULL,
+            last_seen_ts            REAL NOT NULL,
+            first_camera_id         TEXT NOT NULL,
+            last_camera_id          TEXT NOT NULL,
+            sighting_count          INTEGER NOT NULL DEFAULT 1,
+            status                  TEXT NOT NULL DEFAULT 'active',
+            representative_embedding BLOB,
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS vehicle_observations (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            global_id               TEXT NOT NULL,
+            camera_id               TEXT NOT NULL,
+            local_track_id          INTEGER NOT NULL,
+            first_timestamp         REAL NOT NULL,
+            last_timestamp          REAL NOT NULL,
+            vehicle_type            TEXT NOT NULL,
+            canonical_plate         TEXT,
+            plate_confidence        REAL,
+            crop_quality            REAL,
+            reid_embedding          BLOB,
+            bbox_x1                 INTEGER,
+            bbox_y1                 INTEGER,
+            bbox_x2                 INTEGER,
+            bbox_y2                 INTEGER,
+            match_status            TEXT NOT NULL,
+            match_confidence        REAL NOT NULL,
+            match_method            TEXT NOT NULL,
+            plate_similarity        REAL,
+            reid_similarity         REAL,
+            transit_speed_kmh       REAL,
+            distance_km             REAL,
+            match_reason            TEXT,
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (global_id) REFERENCES global_vehicles(global_id),
+            FOREIGN KEY (camera_id) REFERENCES cameras(camera_id),
+            UNIQUE (camera_id, local_track_id)
+        )
+    """)
+
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_plate ON detections(plate_text)"
     )
@@ -91,6 +144,16 @@ def init_db(db_path: str | Path) -> sqlite3.Connection:
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_jobs_status ON processing_jobs(status)"
     )
+
+    # Phase 6B Indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_global_vehicles_plate ON global_vehicles(canonical_plate)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_global_vehicles_last_seen ON global_vehicles(last_seen_ts)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_global_vehicles_status ON global_vehicles(status)")
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_obs_global_id ON vehicle_observations(global_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_obs_cam_ts ON vehicle_observations(camera_id, last_timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_obs_plate ON vehicle_observations(canonical_plate)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_obs_ts ON vehicle_observations(last_timestamp)")
 
     conn.commit()
     return conn
@@ -160,6 +223,20 @@ def insert_detection(
     conn.commit()
 
 
+def _sanitize_row(row_dict: dict) -> dict:
+    """Sanitize SQLite row dictionary converting bytes to strings for JSON serialization."""
+    sanitized = {}
+    for k, v in row_dict.items():
+        if isinstance(v, bytes):
+            try:
+                sanitized[k] = v.decode('utf-8', errors='ignore').strip('\x00')
+            except Exception:
+                sanitized[k] = str(v)
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
 def query_plate_history(conn: sqlite3.Connection, plate_text: str) -> list[dict]:
     """Get all sightings for a specific plate."""
     cursor = conn.cursor()
@@ -173,7 +250,7 @@ def query_plate_history(conn: sqlite3.Connection, plate_text: str) -> list[dict]
     """,
         (plate_text,),
     )
-    return [dict(row) for row in cursor.fetchall()]
+    return [_sanitize_row(dict(row)) for row in cursor.fetchall()]
 
 
 def query_camera_activity(
@@ -237,7 +314,7 @@ def get_recent_detections(conn: sqlite3.Connection, limit: int = 15) -> list[dic
     """,
         (limit,),
     )
-    return [dict(row) for row in cursor.fetchall()]
+    return [_sanitize_row(dict(row)) for row in cursor.fetchall()]
 
 
 def get_detections_over_time(
@@ -534,3 +611,196 @@ def get_job_status(conn: sqlite3.Connection, job_id: str) -> dict | None:
         "created_at": job["created_at"],
         "completed_at": job["completed_at"],
     }
+
+
+# ── Phase 6B: Global Vehicle & Observation Persistence ──
+
+
+def serialize_embedding(embedding: Optional[np.ndarray]) -> Optional[bytes]:
+    """Serialize a numpy embedding vector to raw bytes for BLOB storage."""
+    if embedding is None or len(embedding) == 0:
+        return None
+    return np.asarray(embedding, dtype=np.float32).ravel().tobytes()
+
+
+def deserialize_embedding(blob: Optional[bytes]) -> Optional[np.ndarray]:
+    """Deserialize raw bytes back to a float32 numpy embedding vector."""
+    if blob is None or len(blob) == 0:
+        return None
+    return np.frombuffer(blob, dtype=np.float32)
+
+
+def save_global_identity(conn: sqlite3.Connection, identity: Any) -> None:
+    """
+    Insert or update a GlobalVehicleIdentity in the database.
+    """
+    cursor = conn.cursor()
+    emb_blob = serialize_embedding(identity.representative_embedding)
+    cursor.execute(
+        """
+        INSERT INTO global_vehicles (
+            global_id, canonical_plate, plate_confidence, vehicle_type,
+            first_seen_ts, last_seen_ts, first_camera_id, last_camera_id,
+            sighting_count, status, representative_embedding, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(global_id) DO UPDATE SET
+            canonical_plate = excluded.canonical_plate,
+            plate_confidence = excluded.plate_confidence,
+            vehicle_type = excluded.vehicle_type,
+            last_seen_ts = excluded.last_seen_ts,
+            last_camera_id = excluded.last_camera_id,
+            sighting_count = excluded.sighting_count,
+            status = excluded.status,
+            representative_embedding = COALESCE(excluded.representative_embedding, global_vehicles.representative_embedding),
+            updated_at = datetime('now')
+        """,
+        (
+            identity.global_id,
+            identity.canonical_plate,
+            float(identity.plate_confidence),
+            identity.vehicle_type,
+            float(identity.first_seen_ts),
+            float(identity.last_seen_ts),
+            identity.first_camera_id,
+            identity.last_camera_id,
+            int(identity.sighting_count),
+            identity.status,
+            emb_blob,
+        ),
+    )
+    conn.commit()
+
+
+def record_vehicle_observation(
+    conn: sqlite3.Connection,
+    obs: Any,
+    match_result: Any,
+    first_timestamp: Optional[float] = None,
+) -> bool:
+    """
+    Insert or update a finalized vehicle observation (idempotent on camera_id, local_track_id).
+    """
+    cursor = conn.cursor()
+    emb_blob = serialize_embedding(obs.best_reid_embedding)
+    first_ts = float(first_timestamp) if first_timestamp is not None else float(obs.timestamp)
+    last_ts = float(obs.timestamp)
+
+    bbox_x1, bbox_y1, bbox_x2, bbox_y2 = (None, None, None, None)
+    if obs.bbox is not None and len(obs.bbox) == 4:
+        bbox_x1, bbox_y1, bbox_x2, bbox_y2 = (int(v) for v in obs.bbox)
+
+    cursor.execute(
+        """
+        INSERT INTO vehicle_observations (
+            global_id, camera_id, local_track_id, first_timestamp, last_timestamp,
+            vehicle_type, canonical_plate, plate_confidence, crop_quality,
+            reid_embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+            match_status, match_confidence, match_method, plate_similarity,
+            reid_similarity, transit_speed_kmh, distance_km, match_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(camera_id, local_track_id) DO UPDATE SET
+            global_id = excluded.global_id,
+            last_timestamp = excluded.last_timestamp,
+            canonical_plate = excluded.canonical_plate,
+            plate_confidence = excluded.plate_confidence,
+            crop_quality = excluded.crop_quality,
+            reid_embedding = COALESCE(excluded.reid_embedding, vehicle_observations.reid_embedding),
+            match_status = excluded.match_status,
+            match_confidence = excluded.match_confidence,
+            match_method = excluded.match_method,
+            plate_similarity = excluded.plate_similarity,
+            reid_similarity = excluded.reid_similarity,
+            transit_speed_kmh = excluded.transit_speed_kmh,
+            distance_km = excluded.distance_km,
+            match_reason = excluded.match_reason
+        """,
+        (
+            match_result.global_id,
+            obs.camera_id,
+            int(obs.track_id),
+            first_ts,
+            last_ts,
+            obs.vehicle_type,
+            obs.canonical_plate,
+            float(obs.plate_confidence),
+            float(obs.crop_quality),
+            emb_blob,
+            bbox_x1,
+            bbox_y1,
+            bbox_x2,
+            bbox_y2,
+            match_result.status,
+            float(match_result.confidence),
+            match_result.match_method,
+            float(match_result.plate_similarity) if match_result.plate_similarity is not None else None,
+            float(match_result.reid_similarity) if match_result.reid_similarity is not None else None,
+            float(match_result.transit_speed_kmh) if match_result.transit_speed_kmh is not None else None,
+            float(match_result.distance_km) if match_result.distance_km is not None else None,
+            match_result.reason,
+        ),
+    )
+    conn.commit()
+    return True
+
+
+def get_global_vehicle(conn: sqlite3.Connection, global_id: str) -> Optional[dict]:
+    """Retrieve a global vehicle record by global_id."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM global_vehicles WHERE global_id = ?", (global_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("representative_embedding"):
+        d["representative_embedding"] = deserialize_embedding(d["representative_embedding"])
+    return d
+
+
+def get_vehicle_trajectory(conn: sqlite3.Connection, global_id: str) -> List[dict]:
+    """
+    Retrieve all sightings/observations for a global vehicle, ordered chronologically.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT * FROM vehicle_observations
+        WHERE global_id = ?
+        ORDER BY first_timestamp ASC
+        """,
+        (global_id,),
+    )
+    rows = cursor.fetchall()
+    results = []
+    for r in rows:
+        d = dict(r)
+        if d.get("reid_embedding"):
+            d["reid_embedding"] = deserialize_embedding(d["reid_embedding"])
+        results.append(d)
+    return results
+
+
+def get_all_global_vehicles(
+    conn: sqlite3.Connection,
+    limit: int = 100,
+    status: Optional[str] = None,
+) -> List[dict]:
+    """Retrieve list of global vehicle identities."""
+    cursor = conn.cursor()
+    if status:
+        cursor.execute(
+            "SELECT * FROM global_vehicles WHERE status = ? ORDER BY last_seen_ts DESC LIMIT ?",
+            (status, limit),
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM global_vehicles ORDER BY last_seen_ts DESC LIMIT ?",
+            (limit,),
+        )
+    rows = cursor.fetchall()
+    results = []
+    for r in rows:
+        d = dict(r)
+        if d.get("representative_embedding"):
+            d["representative_embedding"] = deserialize_embedding(d["representative_embedding"])
+        results.append(d)
+    return results

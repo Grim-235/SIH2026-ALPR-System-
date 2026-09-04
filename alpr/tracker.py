@@ -245,6 +245,7 @@ class VehicleTracker:
         # State management
         self.active_tracks: Dict[int, VehicleTrackState] = {}
         self.finalized_tracks: List[VehicleTrackState] = []
+        self._recently_finalized: List[VehicleTrackState] = []
         self._total_tracks_created = 0
         self.current_frame = 0
 
@@ -386,6 +387,7 @@ class VehicleTracker:
         for tid in stale_ids:
             state = self.active_tracks.pop(tid)
             self.finalized_tracks.append(state)
+            self._recently_finalized.append(state)
             just_finalized.append(state)
 
         return just_finalized
@@ -394,13 +396,21 @@ class VehicleTracker:
         """Finalize all remaining active tracks (e.g. at end of stream/video)."""
         all_remaining = list(self.active_tracks.values())
         self.finalized_tracks.extend(all_remaining)
+        self._recently_finalized.extend(all_remaining)
         self.active_tracks.clear()
         return all_remaining
+
+    def pop_finalized_tracks(self) -> List[VehicleTrackState]:
+        """Return and clear newly finalized tracks since the last call."""
+        tracks = list(self._recently_finalized)
+        self._recently_finalized.clear()
+        return tracks
 
     def reset(self) -> None:
         """Reset internal tracker state."""
         self.active_tracks.clear()
         self.finalized_tracks.clear()
+        self._recently_finalized.clear()
         self._total_tracks_created = 0
         self.current_frame = 0
 
