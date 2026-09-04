@@ -21,3 +21,9 @@ from alpr.tracker import (
     PlateRead,
 )
 from alpr.anpr import VehicleANPR
+from alpr.reid import (
+    VehicleReID,
+    extract_embedding,
+    compute_similarity,
+    aggregate_embeddings,
+)

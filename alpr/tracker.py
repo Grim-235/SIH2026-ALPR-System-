@@ -46,10 +46,10 @@ class VehicleTrackState:
     camera_id: str
     vehicle_type: str
 
-    first_frame: int
-    last_frame: int
-    first_timestamp: float
-    last_timestamp: float
+    first_frame: int = 0
+    last_frame: int = 0
+    first_timestamp: float = 0.0
+    last_timestamp: float = 0.0
 
     bbox_history: List[Tuple[int, int, int, int]] = field(default_factory=list)
     confidence_history: List[float] = field(default_factory=list)
@@ -65,6 +65,56 @@ class VehicleTrackState:
     best_plate_quality: float = 0.0
     canonical_plate: Optional[str] = None
     plate_confidence: float = 0.0
+
+    # Phase 5: Visual Re-Identification (ReID)
+    reid_embeddings: List[np.ndarray] = field(default_factory=list)
+    crop_history: List[np.ndarray] = field(default_factory=list)
+    reid_qualities: List[float] = field(default_factory=list)
+    best_reid_embedding: Optional[np.ndarray] = None
+
+    def update_reid(
+        self,
+        embedding: np.ndarray,
+        crop: np.ndarray,
+        quality: float = 0.0,
+        max_crops: int = 5,
+    ) -> None:
+        """
+        Record a new ReID embedding observation, maintain top representative
+        crops, and update the aggregated track-level embedding.
+
+        Args:
+            embedding: 1D L2-normalized numpy array.
+            crop: BGR vehicle crop image.
+            quality: Quality score of the crop.
+            max_crops: Maximum number of representative crops/embeddings to preserve.
+        """
+        if embedding is None or len(embedding) == 0:
+            return
+
+        self.reid_embeddings.append(np.asarray(embedding, dtype=np.float32).ravel())
+        self.crop_history.append(crop.copy())
+        self.reid_qualities.append(float(quality))
+
+        # If exceeding max_crops, retain the highest quality ones
+        if len(self.crop_history) > max_crops:
+            indices = sorted(
+                range(len(self.reid_qualities)),
+                key=lambda i: self.reid_qualities[i],
+                reverse=True,
+            )[:max_crops]
+            indices.sort()  # Restore temporal sequence
+            self.crop_history = [self.crop_history[i] for i in indices]
+            self.reid_embeddings = [self.reid_embeddings[i] for i in indices]
+            self.reid_qualities = [self.reid_qualities[i] for i in indices]
+
+        # Recalculate track-level aggregated embedding (mean pooling + L2 re-normalization)
+        if self.reid_embeddings:
+            stacked = np.stack(self.reid_embeddings, axis=0)
+            mean_vec = np.mean(stacked, axis=0)
+            norm = np.linalg.norm(mean_vec)
+            if norm > 1e-6:
+                self.best_reid_embedding = (mean_vec / norm).astype(np.float32)
 
     def add_plate_read(
         self,

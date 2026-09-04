@@ -36,6 +36,7 @@ from alpr.camera import CameraSource
 from alpr.detector import VehicleDetector, VehicleDetection
 from alpr.tracker import VehicleTracker, ActiveVehicleTrack, VehicleTrackState, PlateRead
 from alpr.anpr import VehicleANPR
+from alpr.reid import VehicleReID
 
 # Configure logging
 logging.basicConfig(
@@ -63,9 +64,12 @@ class CameraWorker:
         detector: Optional[VehicleDetector] = None,
         tracker: Optional[VehicleTracker] = None,
         anpr: Optional[VehicleANPR] = None,
+        reid: Optional[VehicleReID] = None,
+        reid_every_n: int = 15,
         on_detections: Optional[Callable[[str, np.ndarray, List[VehicleDetection], float, float], None]] = None,
         on_tracks: Optional[Callable[[str, np.ndarray, List[ActiveVehicleTrack], float, float], None]] = None,
         on_plate_read: Optional[Callable[[str, int, PlateRead], None]] = None,
+        on_reid_extracted: Optional[Callable[[str, int, np.ndarray], None]] = None,
     ):
         """
         Initialize a camera worker.
@@ -78,9 +82,12 @@ class CameraWorker:
             detector: Optional VehicleDetector instance (for detection-only mode).
             tracker: Optional VehicleTracker instance (for tracking mode).
             anpr: Optional VehicleANPR instance (for ANPR plate recognition mode).
+            reid: Optional VehicleReID instance (for visual appearance ReID).
+            reid_every_n: Throttle interval for representative ReID feature extraction.
             on_detections: Optional callback(camera_id, frame, detections, latency_ms, capture_ts).
             on_tracks: Optional callback(camera_id, frame, active_tracks, latency_ms, capture_ts).
             on_plate_read: Optional callback(camera_id, track_id, plate_read).
+            on_reid_extracted: Optional callback(camera_id, track_id, embedding).
         """
         self.camera_id = camera_id
         self.source = source
@@ -89,9 +96,12 @@ class CameraWorker:
         self.detector = detector
         self.tracker = tracker
         self.anpr = anpr
+        self.reid = reid
+        self.reid_every_n = reid_every_n
         self.on_detections = on_detections
         self.on_tracks = on_tracks
         self.on_plate_read = on_plate_read
+        self.on_reid_extracted = on_reid_extracted
 
         self._running = False
         self._camera: Optional[CameraSource] = None
@@ -102,9 +112,11 @@ class CameraWorker:
         self.frames_processed = 0
         self.vehicles_detected = 0
         self.plates_detected = 0
+        self.reid_extractions = 0
         self._latencies: deque = deque(maxlen=30)
         self._proc_times: deque = deque(maxlen=30)
         self._vehicle_counts: deque = deque(maxlen=30)
+        self._reid_latencies: deque = deque(maxlen=30)
 
     def __enter__(self):
         return self
@@ -241,6 +253,37 @@ class CameraWorker:
                                             except Exception as cb_err:
                                                 logger.error(f"[{self.camera_id}] ANPR callback error: {cb_err}")
 
+                        # ── Stage: ReID Feature Extraction (Phase 5) ──
+                        if self.reid is not None:
+                            for trk in active_tracks:
+                                state = self.tracker.active_tracks.get(trk.track_id)
+                                if state and state.best_vehicle_crop is not None:
+                                    should_extract = False
+                                    if len(state.reid_embeddings) == 0:
+                                        should_extract = True
+                                    elif (
+                                        len(state.reid_embeddings) < 5
+                                        and (
+                                            state.best_crop_quality > (state.reid_qualities[-1] if state.reid_qualities else 0) * 1.15
+                                            or (self.reid_every_n > 0 and cam.frames_read % self.reid_every_n == 0)
+                                        )
+                                    ):
+                                        should_extract = True
+
+                                    if should_extract:
+                                        t_reid0 = time.perf_counter()
+                                        emb = self.reid.extract_embedding(state.best_vehicle_crop)
+                                        reid_lat = (time.perf_counter() - t_reid0) * 1000.0
+                                        if emb is not None:
+                                            state.update_reid(emb, state.best_vehicle_crop, state.best_crop_quality)
+                                            self.reid_extractions += 1
+                                            self._reid_latencies.append(reid_lat)
+                                            if self.on_reid_extracted:
+                                                try:
+                                                    self.on_reid_extracted(self.camera_id, trk.track_id, emb)
+                                                except Exception as cb_err:
+                                                    logger.error(f"[{self.camera_id}] ReID callback error: {cb_err}")
+
                         if self.on_tracks:
                             try:
                                 self.on_tracks(
@@ -318,6 +361,7 @@ class CameraWorker:
         if self.tracker:
             finalized = self.tracker.finalize_all()
             metrics = self.tracker.get_metrics()
+            reid_info = f", reid_extracted={self.reid_extractions}" if self.reid else ""
             logger.info(
                 f"[{self.camera_id}] Worker stopped. "
                 f"read={read_cnt}, proc={self.frames_processed}, "
@@ -325,7 +369,7 @@ class CameraWorker:
                 f"tracks_finalized={len(finalized)}, "
                 f"avg_track_len={metrics['avg_track_length']:.1f}f, "
                 f"in_fps={in_fps:.1f}, infer_fps={self.inference_fps:.1f}, "
-                f"avg_latency={self.avg_latency_ms:.1f}ms"
+                f"avg_latency={self.avg_latency_ms:.1f}ms{reid_info}"
             )
         elif self.detector:
             logger.info(
@@ -365,6 +409,11 @@ class CameraWorker:
                     ]
                     plate_str = f" | plates_read={self.plates_detected} | canonical={canonical_plates}"
 
+                reid_str = ""
+                if self.reid is not None:
+                    reid_tracks = sum(1 for s in self.tracker.active_tracks.values() if s.best_reid_embedding is not None)
+                    reid_str = f" | reid_extracted={self.reid_extractions} (embedded={reid_tracks})"
+
                 logger.info(
                     f"[{self.camera_id}] "
                     f"status={self.status:<7} | "
@@ -375,6 +424,7 @@ class CameraWorker:
                     f"total_tracks={metrics['tracks_created']:<3} | "
                     f"avg_len={metrics['avg_track_length']:4.1f}f"
                     f"{plate_str}"
+                    f"{reid_str}"
                 )
             elif self.detector is not None:
                 logger.info(
@@ -445,9 +495,13 @@ class MultiCameraManager:
         anpr_enabled: bool = False,
         plate_model_path: str = "data/models/license_plate_yolov8_best.pt",
         ocr_every_n: int = 3,
+        reid_enabled: bool = False,
+        reid_weights: Optional[str] = None,
+        reid_every_n: int = 15,
         on_detections: Optional[Callable] = None,
         on_tracks: Optional[Callable] = None,
         on_plate_read: Optional[Callable] = None,
+        on_reid_extracted: Optional[Callable] = None,
     ) -> None:
         """
         Start workers for all cameras in the config.
@@ -465,9 +519,13 @@ class MultiCameraManager:
             anpr_enabled: Whether to attach VehicleANPR to tracked vehicles.
             plate_model_path: Path to plate detector weights.
             ocr_every_n: Process OCR every N frames per vehicle track.
+            reid_enabled: Whether to attach VehicleReID feature extractor.
+            reid_weights: Optional path to custom ReID weights (.pth / .pt).
+            reid_every_n: Process ReID every N frames per vehicle track.
             on_detections: Optional detection callback.
             on_tracks: Optional tracking callback.
             on_plate_read: Optional ANPR plate read callback.
+            on_reid_extracted: Optional ReID extraction callback.
         """
         cameras = self.load_cameras(config_path)
         if not cameras:
@@ -482,6 +540,11 @@ class MultiCameraManager:
                 device=device,
                 ocr_every_n=ocr_every_n,
             )
+
+        shared_reid = None
+        if reid_enabled:
+            logger.info("Initializing VehicleReID feature extractor...")
+            shared_reid = VehicleReID(weights_path=reid_weights, device=device)
 
         for cam in cameras:
             cam_id = cam.get("camera_id")
@@ -501,7 +564,7 @@ class MultiCameraManager:
 
             # Initialize tracker for this camera if requested
             worker_tracker = None
-            if tracker_type or anpr_enabled:
+            if tracker_type or anpr_enabled or reid_enabled:
                 t_type = tracker_type or "bytetrack.yaml"
                 worker_tracker = VehicleTracker(
                     model_path=model_path,
@@ -519,9 +582,12 @@ class MultiCameraManager:
                 detector=detector if not worker_tracker else None,
                 tracker=worker_tracker,
                 anpr=shared_anpr,
+                reid=shared_reid,
+                reid_every_n=reid_every_n,
                 on_detections=on_detections,
                 on_tracks=on_tracks,
                 on_plate_read=on_plate_read,
+                on_reid_extracted=on_reid_extracted,
             )
             self.workers[cam_id] = worker
 
@@ -669,6 +735,25 @@ def main():
         help="Process OCR every N frames per vehicle track (default: 3)",
     )
 
+    # Phase 5: ReID Feature Extraction flags
+    parser.add_argument(
+        "--reid",
+        action="store_true",
+        help="Enable vehicle appearance ReID feature extraction (Phase 5)",
+    )
+    parser.add_argument(
+        "--reid-weights",
+        type=str,
+        default=None,
+        help="Path to custom ReID model weights (.pth / .pt). Defaults to ImageNet ResNet-18 baseline",
+    )
+    parser.add_argument(
+        "--reid-every-n",
+        type=int,
+        default=15,
+        help="Extract ReID embedding at most every N frames per track on crop improvement (default: 15)",
+    )
+
     parser.add_argument(
         "--model",
         type=str,
@@ -716,6 +801,14 @@ def main():
     tracker = None
     detector = None
     anpr = None
+    reid = None
+
+    if args.reid:
+        logger.info("Initializing VehicleReID feature extractor...")
+        reid = VehicleReID(
+            weights_path=args.reid_weights,
+            device=args.device,
+        )
 
     if args.anpr:
         logger.info(f"Initializing full ANPR Pipeline (Tracking + Plate Detection + OCR)...")
@@ -734,7 +827,7 @@ def main():
                 device=args.device,
                 ocr_every_n=args.ocr_every_n,
             )
-    elif args.track:
+    elif args.track or args.reid:
         logger.info(f"Initializing VehicleTracker with {args.tracker_type}...")
         if args.source:
             tracker = VehicleTracker(
@@ -764,6 +857,8 @@ def main():
             detector=detector,
             tracker=tracker,
             anpr=anpr,
+            reid=reid,
+            reid_every_n=args.reid_every_n,
         )
         worker._stats_interval = args.stats_interval
         worker.start()
@@ -774,7 +869,7 @@ def main():
             args.config,
             use_stream=not args.direct,
             detector=detector,
-            tracker_type=args.tracker_type if (args.track or args.anpr) else None,
+            tracker_type=args.tracker_type if (args.track or args.anpr or args.reid) else None,
             model_path=args.model,
             conf=args.conf,
             iou=args.iou,
@@ -782,7 +877,11 @@ def main():
             anpr_enabled=args.anpr,
             plate_model_path=args.plate_model,
             ocr_every_n=args.ocr_every_n,
+            reid_enabled=args.reid,
+            reid_weights=args.reid_weights,
+            reid_every_n=args.reid_every_n,
         )
+
 
 
 if __name__ == "__main__":
