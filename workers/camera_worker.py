@@ -2,18 +2,17 @@
 Camera Worker — per-camera stream processing worker.
 
 Connects to a video source via CameraSource, reads frames in a loop,
-and logs performance metrics. This is the Phase 1 skeleton: no AI
-processing, just validates streaming infrastructure works.
+runs vehicle detection (Phase 2) if enabled, and logs performance metrics.
 
 Usage:
-    # Single camera from RTSP
-    python -m workers.camera_worker --camera-id CAM-001 --source rtsp://localhost:8554/cam01
+    # Single camera with vehicle detection from RTSP
+    python -m workers.camera_worker --camera-id CAM-001 --source rtsp://localhost:8554/cam01 --detect
 
-    # Single camera from MP4 (same CameraSource API)
-    python -m workers.camera_worker --camera-id CAM-001 --source inputs/cam01.mp4
+    # All cameras with vehicle detection
+    python -m workers.camera_worker --config configs/cameras.json --detect
 
-    # All cameras from config
-    python -m workers.camera_worker --config configs/cameras.json --all
+    # Plain frame reading without detection (Phase 1 mode)
+    python -m workers.camera_worker --config configs/cameras.json
 """
 
 import argparse
@@ -23,10 +22,14 @@ import signal
 import sys
 import threading
 import time
+from collections import deque
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
+
+import numpy as np
 
 from alpr.camera import CameraSource
+from alpr.detector import VehicleDetector, VehicleDetection
 
 # Configure logging
 logging.basicConfig(
@@ -38,11 +41,11 @@ logger = logging.getLogger("workers.camera")
 
 class CameraWorker:
     """
-    Per-camera frame reader with lifecycle management.
+    Per-camera frame reader and pipeline orchestrator.
 
     Connects to a source, reads frames continuously, handles
-    reconnection on failure, and reports performance metrics.
-    No AI processing — skeleton for Phase 1 validation.
+    reconnection on failure, runs detection if configured, and
+    reports performance metrics (input FPS, inference FPS, latency).
     """
 
     def __init__(
@@ -51,6 +54,8 @@ class CameraWorker:
         source: str,
         fps_target: float = 0.0,
         reconnect_max_retries: int = 10,
+        detector: Optional[VehicleDetector] = None,
+        on_detections: Optional[Callable[[str, np.ndarray, List[VehicleDetection], float, float], None]] = None,
     ):
         """
         Initialize a camera worker.
@@ -60,16 +65,33 @@ class CameraWorker:
             source: Video source — RTSP URL, file path, or webcam index.
             fps_target: Target FPS for throttling (0 = no throttle).
             reconnect_max_retries: Max reconnection attempts.
+            detector: Optional VehicleDetector instance for running vehicle detection.
+            on_detections: Optional callback(camera_id, frame, detections, latency_ms, capture_ts).
         """
         self.camera_id = camera_id
         self.source = source
         self.fps_target = fps_target
         self.reconnect_max_retries = reconnect_max_retries
+        self.detector = detector
+        self.on_detections = on_detections
 
         self._running = False
         self._camera: Optional[CameraSource] = None
         self._stats_interval = 10.0  # Log stats every N seconds
         self._last_stats_time = 0.0
+
+        # Performance & detection metrics
+        self.frames_processed = 0
+        self.vehicles_detected = 0
+        self._latencies: deque = deque(maxlen=30)
+        self._proc_times: deque = deque(maxlen=30)
+        self._vehicle_counts: deque = deque(maxlen=30)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
 
     @property
     def running(self) -> bool:
@@ -83,16 +105,46 @@ class CameraWorker:
             return self._camera.status
         return "unknown"
 
+    @property
+    def input_fps(self) -> float:
+        """Measured rate of frames read from the video source."""
+        if self._camera:
+            return self._camera.get_fps()
+        return 0.0
+
+    @property
+    def inference_fps(self) -> float:
+        """Rate of inference frame processing (rolling average)."""
+        if len(self._proc_times) < 2:
+            return 0.0
+        times = list(self._proc_times)
+        time_diff = times[-1] - times[0]
+        return (len(times) - 1) / time_diff if time_diff > 0 else 0.0
+
+    @property
+    def avg_latency_ms(self) -> float:
+        """Average YOLO inference latency in milliseconds."""
+        if not self._latencies:
+            return 0.0
+        return sum(self._latencies) / len(self._latencies)
+
+    @property
+    def avg_vehicles_per_frame(self) -> float:
+        """Average number of vehicles detected per frame."""
+        if not self._vehicle_counts:
+            return 0.0
+        return sum(self._vehicle_counts) / len(self._vehicle_counts)
+
     def start(self) -> None:
         """
         Main processing loop.
 
-        Connects to the source and reads frames continuously.
-        On stream failure, attempts reconnection if the source is a stream.
-        Logs FPS and frame count statistics periodically.
+        Connects to the source, reads frames continuously, runs vehicle detection
+        if detector is provided, and handles reconnection on failure.
         """
         self._running = True
-        logger.info(f"[{self.camera_id}] Worker starting — source: {self.source}")
+        has_det = "with YOLO vehicle detection" if self.detector else "frame ingestion only"
+        logger.info(f"[{self.camera_id}] Worker starting ({has_det}) — source: {self.source}")
 
         self._camera = CameraSource(
             source=self.source,
@@ -128,6 +180,28 @@ class CameraWorker:
 
                 if success:
                     consecutive_failures = 0
+
+                    # Stage 1: Vehicle Detection (Phase 2)
+                    if self.detector is not None and frame is not None:
+                        detections, latency_ms = self.detector.detect(frame)
+                        self.frames_processed += 1
+                        self.vehicles_detected += len(detections)
+                        self._latencies.append(latency_ms)
+                        self._proc_times.append(time.time())
+                        self._vehicle_counts.append(len(detections))
+
+                        if self.on_detections:
+                            try:
+                                self.on_detections(
+                                    self.camera_id,
+                                    frame,
+                                    detections,
+                                    latency_ms,
+                                    capture_ts,
+                                )
+                            except Exception as cb_err:
+                                logger.error(f"[{self.camera_id}] Callback error: {cb_err}")
+
                     self._log_stats_if_due()
                 else:
                     if not self._running or self._camera is None:
@@ -164,12 +238,25 @@ class CameraWorker:
             return
 
         self._running = False
-        logger.info(
-            f"[{self.camera_id}] Worker stopping. "
-            f"Frames read: {self._camera.frames_read if self._camera else 0}, "
-            f"Frames dropped: {self._camera.frames_dropped if self._camera else 0}, "
-            f"Measured FPS: {self._camera.get_fps():.1f}" if self._camera else ""
-        )
+        cam = self._camera
+        read_cnt = cam.frames_read if cam else 0
+        drop_cnt = cam.frames_dropped if cam else 0
+        in_fps = cam.get_fps() if cam else 0.0
+
+        if self.detector:
+            logger.info(
+                f"[{self.camera_id}] Worker stopped. "
+                f"read={read_cnt}, proc={self.frames_processed}, "
+                f"vehicles={self.vehicles_detected}, "
+                f"in_fps={in_fps:.1f}, infer_fps={self.inference_fps:.1f}, "
+                f"avg_latency={self.avg_latency_ms:.1f}ms"
+            )
+        else:
+            logger.info(
+                f"[{self.camera_id}] Worker stopped. "
+                f"read={read_cnt}, dropped={drop_cnt}, in_fps={in_fps:.1f}"
+            )
+
         if self._camera:
             self._camera.release()
             self._camera = None
@@ -181,16 +268,27 @@ class CameraWorker:
             self._last_stats_time = now
             cam = self._camera
             if cam:
-                logger.info(
-                    f"[{self.camera_id}] "
-                    f"status={self.status} | "
-                    f"frames={cam.frames_read} | "
-                    f"dropped={cam.frames_dropped} | "
-                    f"fps={cam.get_fps():.1f} | "
-                    f"native_fps={cam.get_native_fps():.1f} | "
-                    f"resolution={cam.get_resolution()} | "
-                    f"uptime={cam.connection_uptime:.0f}s"
-                )
+                if self.detector is not None:
+                    logger.info(
+                        f"[{self.camera_id}] "
+                        f"status={self.status:<7} | "
+                        f"input_fps={self.input_fps:4.1f} | "
+                        f"infer_fps={self.inference_fps:4.1f} | "
+                        f"latency={self.avg_latency_ms:5.1f}ms | "
+                        f"vehicles/frame={self.avg_vehicles_per_frame:3.1f} | "
+                        f"total_vehicles={self.vehicles_detected}"
+                    )
+                else:
+                    logger.info(
+                        f"[{self.camera_id}] "
+                        f"status={self.status:<7} | "
+                        f"frames={cam.frames_read} | "
+                        f"dropped={cam.frames_dropped} | "
+                        f"fps={cam.get_fps():.1f} | "
+                        f"native_fps={cam.get_native_fps():.1f} | "
+                        f"resolution={cam.get_resolution()} | "
+                        f"uptime={cam.connection_uptime:.0f}s"
+                    )
 
 
 class MultiCameraManager:
@@ -216,7 +314,6 @@ class MultiCameraManager:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        # Support both list and dict-with-cameras-key formats
         if isinstance(data, dict) and "cameras" in data:
             cameras = data["cameras"]
         elif isinstance(data, list):
@@ -227,7 +324,13 @@ class MultiCameraManager:
 
         return cameras
 
-    def start_all(self, config_path: str, use_stream: bool = True) -> None:
+    def start_all(
+        self,
+        config_path: str,
+        use_stream: bool = True,
+        detector: Optional[VehicleDetector] = None,
+        on_detections: Optional[Callable] = None,
+    ) -> None:
         """
         Start workers for all cameras in the config.
 
@@ -235,6 +338,8 @@ class MultiCameraManager:
             config_path: Path to cameras.json.
             use_stream: If True, connect via stream_url (RTSP).
                         If False, connect directly to the video file.
+            detector: Optional VehicleDetector instance shared across workers.
+            on_detections: Optional callback for vehicle detections.
         """
         cameras = self.load_cameras(config_path)
         if not cameras:
@@ -261,6 +366,8 @@ class MultiCameraManager:
                 camera_id=cam_id,
                 source=source,
                 fps_target=float(fps_target),
+                detector=detector,
+                on_detections=on_detections,
             )
             self.workers[cam_id] = worker
 
@@ -272,15 +379,18 @@ class MultiCameraManager:
             self._threads[cam_id] = thread
 
         # Print startup summary
-        print(f"\n{'='*70}")
+        print(f"\n{'='*75}")
+        mode_str = "YOLO Vehicle Detection" if detector else "Ingestion Only"
+        print(f"  Multi-Camera Pipeline Mode: {mode_str}")
+        print(f"{'='*75}")
         print(f"{'Camera ID':<12} | {'Source':<45} | {'FPS Target'}")
-        print(f"{'-'*70}")
+        print(f"{'-'*75}")
         for cam_id, worker in self.workers.items():
             src = worker.source
             if len(src) > 42:
                 src = "..." + src[-39:]
             print(f"{cam_id:<12} | {src:<45} | {worker.fps_target}")
-        print(f"{'='*70}\n")
+        print(f"{'='*75}\n")
 
         # Start all threads
         for cam_id, thread in self._threads.items():
@@ -318,7 +428,7 @@ class MultiCameraManager:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Camera Worker — per-camera stream reader (Phase 1 skeleton)"
+        description="Camera Worker — multi-camera ingestion & vehicle detection"
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
@@ -357,7 +467,57 @@ def main():
         help="Seconds between stats log messages (default: 10)",
     )
 
+    # Phase 2: Vehicle Detection flags
+    parser.add_argument(
+        "--detect",
+        action="store_true",
+        help="Enable YOLO vehicle detection",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="data/models/yolov8n.pt",
+        help="Path to YOLO vehicle model weights",
+    )
+    parser.add_argument(
+        "--conf",
+        type=float,
+        default=0.35,
+        help="Confidence threshold for vehicle detection (default: 0.35)",
+    )
+    parser.add_argument(
+        "--iou",
+        type=float,
+        default=0.5,
+        help="NMS IoU threshold (default: 0.5)",
+    )
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=640,
+        help="Inference image size (default: 640)",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Compute device: auto, cpu, cuda:0",
+    )
+
     args = parser.parse_args()
+
+    # Instantiate detector if requested
+    detector = None
+    if args.detect:
+        logger.info(f"Loading vehicle detector from {args.model}...")
+        detector = VehicleDetector(
+            model_path=args.model,
+            conf=args.conf,
+            iou=args.iou,
+            imgsz=args.imgsz,
+            device=args.device,
+        )
+        logger.info(f"Vehicle detector ready on device: {detector.device}")
 
     # Handle shutdown signals
     def signal_handler(sig, frame):
@@ -371,19 +531,22 @@ def main():
         signal.signal(signal.SIGBREAK, signal_handler)
 
     if args.source:
-        # Single camera mode
         worker = CameraWorker(
             camera_id=args.camera_id,
             source=args.source,
             fps_target=args.fps,
+            detector=detector,
         )
         worker._stats_interval = args.stats_interval
         worker.start()
     else:
-        # Multi-camera mode from config
         manager = MultiCameraManager()
         main._manager = manager  # type: ignore
-        manager.start_all(args.config, use_stream=not args.direct)
+        manager.start_all(
+            args.config,
+            use_stream=not args.direct,
+            detector=detector,
+        )
 
 
 if __name__ == "__main__":
