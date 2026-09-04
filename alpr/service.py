@@ -26,6 +26,14 @@ from alpr.database import (
     get_global_vehicle_by_plate,
     get_all_global_vehicles,
     deserialize_embedding,
+    record_security_alert,
+    get_security_alerts,
+    get_security_alert_by_id,
+    acknowledge_security_alert,
+    get_security_alerts_summary,
+    add_enriched_blacklist_entry,
+    get_enriched_blacklist,
+    remove_from_blacklist,
 )
 from alpr.trajectory import (
     VehicleTrajectory,
@@ -48,6 +56,18 @@ from alpr.gis import (
     get_los_color,
     FOLIUM_AVAILABLE,
 )
+from alpr.alerts import (
+    AlertEngine,
+    AlertRecord,
+    ALERT_BLACKLIST_EXACT,
+    ALERT_BLACKLIST_FUZZY,
+    ALERT_VELOCITY_ANOMALY,
+    ALERT_TEMPORAL_INVERSION,
+    ALERT_TOPOLOGY_VIOLATION,
+    ALERT_IDENTITY_UNCERTAIN,
+    ALERT_EXCESSIVE_DWELL,
+    ALERT_RAPID_LOOPING,
+)
 
 logger = logging.getLogger("alpr.service")
 
@@ -62,6 +82,7 @@ class DashboardService:
         db_path: Union[str, Path] = "data/alpr.db",
         cameras_path: Union[str, Path] = "configs/cameras.json",
         camera_graph_path: Union[str, Path] = "configs/camera_graph.json",
+        velocity_bound_kmh: float = 140.0,
     ):
         self.db_path = Path(db_path)
         self.cameras_path = Path(cameras_path)
@@ -75,6 +96,9 @@ class DashboardService:
         self.analytics_engine = CorridorAnalyticsEngine()
         self.congestion_engine = TrafficCongestionEngine(
             cameras_path=self.cameras_path,
+        )
+        self.alert_engine = AlertEngine(
+            velocity_bound_kmh=velocity_bound_kmh,
         )
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -364,6 +388,168 @@ class DashboardService:
             if conn is None:
                 c.close()
 
+    # ── Layer 4: Security Alerts & Threat Surveillance (Phase 7E) ──
+
+    def get_alerts_summary(self, conn: Optional[sqlite3.Connection] = None) -> Dict[str, Any]:
+        """Get high-level summary of active, unacknowledged, and categorized security alerts."""
+        c = conn or self._get_connection()
+        try:
+            return get_security_alerts_summary(c)
+        finally:
+            if conn is None:
+                c.close()
+
+    def get_alerts(
+        self,
+        alert_type: Optional[str] = None,
+        severity: Optional[str] = None,
+        only_unacknowledged: bool = False,
+        global_id: Optional[str] = None,
+        canonical_plate: Optional[str] = None,
+        limit: int = 100,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve filtered security alerts."""
+        c = conn or self._get_connection()
+        try:
+            return get_security_alerts(
+                c,
+                alert_type=alert_type,
+                severity=severity,
+                only_unacknowledged=only_unacknowledged,
+                global_id=global_id,
+                canonical_plate=canonical_plate,
+                limit=limit,
+            )
+        finally:
+            if conn is None:
+                c.close()
+
+    def get_alert_by_id(
+        self,
+        alert_id: str,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Retrieve single alert details by unique alert ID."""
+        c = conn or self._get_connection()
+        try:
+            return get_security_alert_by_id(c, alert_id)
+        finally:
+            if conn is None:
+                c.close()
+
+    def acknowledge_alert(
+        self,
+        alert_id: str,
+        operator: str = "operator",
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> bool:
+        """Mark an alert as acknowledged."""
+        c = conn or self._get_connection()
+        try:
+            return acknowledge_security_alert(c, alert_id=alert_id, acknowledged_by=operator)
+        finally:
+            if conn is None:
+                c.close()
+
+    def get_blacklist(
+        self,
+        category: Optional[str] = None,
+        active_only: bool = True,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve watchlist / blacklist records."""
+        c = conn or self._get_connection()
+        try:
+            return get_enriched_blacklist(c, category=category, active_only=active_only)
+        finally:
+            if conn is None:
+                c.close()
+
+    def add_to_blacklist(
+        self,
+        plate: str,
+        category: str = "CUSTOM",
+        reason: Optional[str] = None,
+        severity: str = "HIGH",
+        notes: Optional[str] = None,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> bool:
+        """Add or update an enriched blacklist plate."""
+        c = conn or self._get_connection()
+        try:
+            return add_enriched_blacklist_entry(
+                c,
+                plate_text=plate,
+                category=category,
+                reason=reason,
+                severity=severity,
+                notes=notes,
+            )
+        finally:
+            if conn is None:
+                c.close()
+
+    def remove_from_blacklist(
+        self,
+        plate: str,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> bool:
+        """Remove a plate from the watchlist / blacklist."""
+        c = conn or self._get_connection()
+        try:
+            remove_from_blacklist(c, plate_text=plate)
+            return True
+        finally:
+            if conn is None:
+                c.close()
+
+    def scan_and_sync_alerts(
+        self,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> Dict[str, Any]:
+        """
+        Scan all stored vehicle trajectories and observations in the database,
+        evaluate them against active blacklist and anomaly rules, and persist
+        any discovered alerts idempotently.
+        """
+        c = conn or self._get_connection()
+        try:
+            blacklist = get_enriched_blacklist(c, active_only=True)
+            trajectories = self.trajectory_reconstructor.list_all_trajectories(c)
+            total_discovered = 0
+            new_persisted = 0
+
+            for traj in trajectories:
+                alerts = self.alert_engine.evaluate_trajectory(traj, blacklist_records=blacklist)
+                for a in alerts:
+                    total_discovered += 1
+                    record_security_alert(
+                        c,
+                        alert_id=a.alert_id,
+                        alert_type=a.alert_type,
+                        severity=a.severity,
+                        title=a.title,
+                        description=a.description,
+                        camera_id=a.camera_id,
+                        timestamp=a.timestamp,
+                        iso_timestamp=a.iso_timestamp,
+                        global_id=a.global_id,
+                        canonical_plate=a.canonical_plate,
+                        details=a.details,
+                    )
+
+            summary = get_security_alerts_summary(c)
+            return {
+                "status": "success",
+                "trajectories_scanned": len(trajectories),
+                "alerts_evaluated": total_discovered,
+                "summary": summary,
+            }
+        finally:
+            if conn is None:
+                c.close()
+
 
 # Module-level singleton
 _default_service: Optional[DashboardService] = None
@@ -373,6 +559,7 @@ def get_dashboard_service(
     db_path: Union[str, Path] = "data/alpr.db",
     cameras_path: Union[str, Path] = "configs/cameras.json",
     camera_graph_path: Union[str, Path] = "configs/camera_graph.json",
+    velocity_bound_kmh: float = 140.0,
 ) -> DashboardService:
     """Get or create singleton DashboardService instance."""
     global _default_service
@@ -381,5 +568,7 @@ def get_dashboard_service(
             db_path=db_path,
             cameras_path=cameras_path,
             camera_graph_path=camera_graph_path,
+            velocity_bound_kmh=velocity_bound_kmh,
         )
     return _default_service
+

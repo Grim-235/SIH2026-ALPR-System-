@@ -127,36 +127,104 @@ def api_routes():
     routes = get_top_routes(conn)
     return jsonify(routes or [])
 
+# ============================================================================
+# PHASE 7E: SECURITY ALERTS & BLACKLIST ENFORCEMENT API
+# ============================================================================
+
+@app.route('/api/v1/alerts', methods=['GET'])
 @app.route('/api/alerts', methods=['GET'])
 def api_alerts_list():
-    """Get all alerts"""
-    alerts = get_alerts(conn)
+    """Get filtered security alerts."""
+    alert_type = request.args.get('type')
+    severity = request.args.get('severity')
+    only_unack = request.args.get('unacknowledged', 'false').lower() in ('true', '1')
+    limit = int(request.args.get('limit', 100))
+    alerts = dashboard_service.get_alerts(
+        alert_type=alert_type,
+        severity=severity,
+        only_unacknowledged=only_unack,
+        limit=limit,
+        conn=conn,
+    )
     return jsonify(alerts or [])
 
-@app.route('/api/alerts/<int:alert_id>/acknowledge', methods=['POST'])
-def api_ack_alert(alert_id):
-    """Acknowledge an alert"""
-    acknowledge_alert(conn, alert_id)
-    return jsonify({'success': True})
+@app.route('/api/v1/alerts/summary', methods=['GET'])
+@app.route('/api/alerts/summary', methods=['GET'])
+def api_alerts_summary():
+    """Get security alerts overview counts and breakdowns."""
+    summary = dashboard_service.get_alerts_summary(conn)
+    return jsonify(summary)
 
+@app.route('/api/v1/alerts/<alert_id>/acknowledge', methods=['POST'])
+@app.route('/api/alerts/<alert_id>/acknowledge', methods=['POST'])
+def api_ack_alert(alert_id):
+    """Acknowledge a security alert."""
+    data = request.get_json(silent=True) or {}
+    operator = data.get('operator', 'operator')
+    success = dashboard_service.acknowledge_alert(alert_id, operator=operator, conn=conn)
+    if not success and alert_id.isdigit():
+        # Fallback for legacy numeric IDs
+        acknowledge_alert(conn, int(alert_id))
+        success = True
+    return jsonify({'success': success, 'alert_id': alert_id})
+
+@app.route('/api/v1/alerts/scan', methods=['POST'])
+@app.route('/api/alerts/scan', methods=['POST'])
+def api_alerts_scan():
+    """Trigger on-demand scan of stored vehicle trajectories to evaluate alerts."""
+    result = dashboard_service.scan_and_sync_alerts(conn)
+    return jsonify(result)
+
+@app.route('/api/v1/blacklist', methods=['GET'])
 @app.route('/api/blacklist', methods=['GET'])
 def api_blacklist():
-    """Get blacklist"""
-    blacklist = get_blacklist(conn)
-    return jsonify([{'plate': b['plate_text'], 'reason': b.get('reason', 'Flagged')} for b in blacklist] if blacklist else [])
+    """Get watchlist / blacklist."""
+    category = request.args.get('category')
+    blacklist = dashboard_service.get_blacklist(category=category, conn=conn)
+    # Return formatted payload supporting both v1 and legacy schema
+    out = []
+    for b in (blacklist or []):
+        out.append({
+            'plate': b['plate_text'],
+            'plate_text': b['plate_text'],
+            'category': b.get('category', 'CUSTOM'),
+            'reason': b.get('reason', 'Flagged'),
+            'severity': b.get('severity', 'HIGH'),
+            'notes': b.get('notes'),
+            'added_at': b.get('added_at'),
+            'is_active': bool(b.get('is_active', 1)),
+        })
+    return jsonify(out)
 
+@app.route('/api/v1/blacklist', methods=['POST'])
 @app.route('/api/blacklist', methods=['POST'])
 def api_add_blacklist():
-    """Add to blacklist"""
-    data = request.json
-    add_to_blacklist(conn, data['plate'].upper(), data.get('reason', 'Flagged'))
-    return jsonify({'success': True})
+    """Add or update an entry on the blacklist."""
+    data = request.json or {}
+    plate = data.get('plate') or data.get('plate_text')
+    if not plate:
+        return jsonify({'error': 'Plate number is required'}), 400
+    category = data.get('category', 'CUSTOM')
+    reason = data.get('reason', 'Flagged vehicle')
+    severity = data.get('severity', 'HIGH')
+    notes = data.get('notes')
+    dashboard_service.add_to_blacklist(
+        plate=plate,
+        category=category,
+        reason=reason,
+        severity=severity,
+        notes=notes,
+        conn=conn,
+    )
+    return jsonify({'success': True, 'plate': plate.upper()})
 
+@app.route('/api/v1/blacklist/<plate>', methods=['DELETE'])
 @app.route('/api/blacklist/<plate>', methods=['DELETE'])
 def api_remove_blacklist(plate):
-    """Remove from blacklist"""
-    remove_from_blacklist(conn, plate.upper())
-    return jsonify({'success': True})
+    """Remove a plate from the watchlist / blacklist."""
+    dashboard_service.remove_from_blacklist(plate, conn=conn)
+    return jsonify({'success': True, 'plate': plate.upper()})
+
 
 @app.route('/api/upload-video', methods=['POST'])
 def api_upload_video():

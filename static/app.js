@@ -780,17 +780,25 @@ async function deleteJob(jobId) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. UTILITY: Threat Alerts & Blacklist Management
+// 8. UTILITY: Threat Alerts & Blacklist Management (Phase 7E Enriched)
 // ---------------------------------------------------------------------------
+let currentAlertFilter = 'ALL';
+
 function initBlacklist() {
     const addBtn = document.getElementById('addBlacklistBtn');
     const plateInput = document.getElementById('blacklistPlateInput');
+    const catSelect = document.getElementById('blacklistCategorySelect');
+    const sevSelect = document.getElementById('blacklistSeveritySelect');
     const reasonInput = document.getElementById('blacklistReasonInput');
+    const scanBtn = document.getElementById('scanAlertsBtn');
+    const refreshBtn = document.getElementById('refreshAlertsBtn');
 
     if (addBtn && plateInput) {
         addBtn.addEventListener('click', async () => {
             const plate = plateInput.value.trim().toUpperCase();
-            const reason = reasonInput ? reasonInput.value.trim() : 'Flagged';
+            const category = catSelect ? catSelect.value : 'CUSTOM';
+            const severity = sevSelect ? sevSelect.value : 'HIGH';
+            const reason = reasonInput && reasonInput.value.trim() ? reasonInput.value.trim() : 'Flagged vehicle';
 
             if (!plate) {
                 alert('Please enter a license plate.');
@@ -798,10 +806,10 @@ function initBlacklist() {
             }
 
             try {
-                const res = await fetch('/api/blacklist', {
+                const res = await fetch('/api/v1/blacklist', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ plate, reason }),
+                    body: JSON.stringify({ plate, category, severity, reason }),
                 });
                 if (res.ok) {
                     plateInput.value = '';
@@ -813,37 +821,130 @@ function initBlacklist() {
             }
         });
     }
+
+    if (scanBtn) {
+        scanBtn.addEventListener('click', async () => {
+            scanBtn.disabled = true;
+            scanBtn.innerHTML = `<span class="material-symbols-outlined text-sm animate-spin">refresh</span> Scanning...`;
+            try {
+                const res = await fetch('/api/v1/alerts/scan', { method: 'POST' });
+                if (res.ok) {
+                    await loadBlacklistAndAlerts();
+                }
+            } catch (err) {
+                console.error('Error triggering alert scan:', err);
+            } finally {
+                scanBtn.disabled = false;
+                scanBtn.innerHTML = `<span class="material-symbols-outlined text-sm">security_update_good</span><span>Scan Trajectories</span>`;
+            }
+        });
+    }
+
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => {
+            loadBlacklistAndAlerts();
+        });
+    }
+
+    // Filter Buttons
+    document.querySelectorAll('.alert-filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.alert-filter-btn').forEach(b => {
+                b.classList.remove('bg-primary', 'text-white');
+                b.classList.add('bg-surface-subtle', 'text-text-muted');
+            });
+            btn.classList.add('bg-primary', 'text-white');
+            btn.classList.remove('bg-surface-subtle', 'text-text-muted');
+            currentAlertFilter = btn.getAttribute('data-filter') || 'ALL';
+            loadAlerts();
+        });
+    });
 }
 
 async function loadBlacklistAndAlerts() {
-    await Promise.all([loadBlacklist(), loadAlerts()]);
+    await Promise.all([loadBlacklist(), loadAlertsSummary(), loadAlerts()]);
+}
+
+async function loadAlertsSummary() {
+    try {
+        const res = await fetch('/api/v1/alerts/summary');
+        if (!res.ok) return;
+        const s = await res.json();
+
+        const totalEl = document.getElementById('alertCountTotal');
+        const unackEl = document.getElementById('alertCountUnack');
+        const critEl = document.getElementById('alertCountCritical');
+        const highEl = document.getElementById('alertCountHigh');
+        const medEl = document.getElementById('alertCountMedium');
+        const lowEl = document.getElementById('alertCountLow');
+
+        if (totalEl) totalEl.textContent = s.total_alerts ?? 0;
+        if (unackEl) unackEl.textContent = s.unacknowledged_count ?? 0;
+
+        const bySev = s.unack_by_severity || {};
+        if (critEl) critEl.textContent = bySev.CRITICAL ?? 0;
+        if (highEl) highEl.textContent = bySev.HIGH ?? 0;
+        if (medEl) medEl.textContent = bySev.MEDIUM ?? 0;
+        if (lowEl) lowEl.textContent = bySev.LOW ?? 0;
+
+        // Header & Nav Badges
+        const unack = s.unacknowledged_count ?? 0;
+        const navBadge = document.getElementById('navAlertBadge');
+        const headerBadge = document.getElementById('headerNotificationBadge');
+        const statUnack = document.getElementById('statUnackAlerts');
+
+        if (navBadge) {
+            navBadge.textContent = unack;
+            navBadge.classList.toggle('hidden', unack === 0);
+        }
+        if (headerBadge) {
+            headerBadge.textContent = unack;
+            headerBadge.classList.toggle('hidden', unack === 0);
+        }
+        if (statUnack) statUnack.textContent = unack;
+    } catch (err) {
+        console.error('Error loading alerts summary:', err);
+    }
 }
 
 async function loadBlacklist() {
     const listEl = document.getElementById('blacklistItemsList');
+    const badgeEl = document.getElementById('blacklistCountBadge');
     if (!listEl) return;
 
     try {
-        const res = await fetch('/api/blacklist');
+        const res = await fetch('/api/v1/blacklist');
         if (!res.ok) return;
         const items = await res.json();
 
+        if (badgeEl) badgeEl.textContent = items ? items.length : 0;
+
         if (!items || items.length === 0) {
-            listEl.innerHTML = `<p class="text-xs text-text-muted">No flagged plates.</p>`;
+            listEl.innerHTML = `<p class="text-xs text-text-muted">No flagged plates registered.</p>`;
             return;
         }
 
-        listEl.innerHTML = items.map(b => `
-            <div class="p-2 rounded bg-surface-subtle border border-border-light flex justify-between items-center text-xs">
-                <div>
-                    <span class="font-bold font-mono text-error">${b.plate}</span>
-                    <span class="text-text-muted block text-[10px]">${b.reason || 'Flagged'}</span>
+        listEl.innerHTML = items.map(b => {
+            const sevBadge = b.severity === 'CRITICAL'
+                ? 'bg-error text-white'
+                : (b.severity === 'HIGH' ? 'bg-orange-100 text-orange-800' : 'bg-amber-100 text-amber-800');
+
+            return `
+                <div class="p-2.5 rounded bg-surface-subtle border border-border-light flex justify-between items-start text-xs">
+                    <div class="space-y-0.5">
+                        <div class="flex items-center gap-1.5">
+                            <span class="font-mono font-extrabold text-error">${b.plate}</span>
+                            <span class="px-1.5 py-0.2 rounded text-[9px] font-bold ${sevBadge}">${b.severity}</span>
+                            <span class="text-[10px] text-text-muted bg-surface px-1 rounded border border-border-light">${b.category}</span>
+                        </div>
+                        <span class="text-text-muted block text-[11px]">${b.reason || 'Flagged vehicle'}</span>
+                    </div>
+                    <button onclick="removeBlacklist('${b.plate}')" class="text-text-muted hover:text-error transition-colors p-0.5" title="Remove plate">
+                        <span class="material-symbols-outlined text-sm">close</span>
+                    </button>
                 </div>
-                <button onclick="removeBlacklist('${b.plate}')" class="text-text-muted hover:text-error transition-colors">
-                    <span class="material-symbols-outlined text-sm">close</span>
-                </button>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     } catch (err) {
         console.error('Error loading blacklist:', err);
     }
@@ -851,8 +952,9 @@ async function loadBlacklist() {
 
 async function removeBlacklist(plate) {
     try {
-        await fetch(`/api/blacklist/${encodeURIComponent(plate)}`, { method: 'DELETE' });
+        await fetch(`/api/v1/blacklist/${encodeURIComponent(plate)}`, { method: 'DELETE' });
         loadBlacklist();
+        loadAlertsSummary();
     } catch (err) {
         console.error('Error removing from blacklist:', err);
     }
@@ -863,26 +965,81 @@ async function loadAlerts() {
     if (!tbody) return;
 
     try {
-        const res = await fetch('/api/alerts');
+        let url = '/api/v1/alerts?limit=100';
+        if (currentAlertFilter === 'UNACK') {
+            url += '&unacknowledged=true';
+        } else if (currentAlertFilter === 'CRITICAL' || currentAlertFilter === 'HIGH' || currentAlertFilter === 'MEDIUM') {
+            url += `&severity=${currentAlertFilter}`;
+        }
+
+        const res = await fetch(url);
         if (!res.ok) return;
         const alerts = await res.json();
 
         if (!alerts || alerts.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="5" class="py-4 text-center text-text-muted">No active alerts.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="7" class="py-6 text-center text-text-muted">No matching security alerts.</td></tr>`;
             return;
         }
 
-        tbody.innerHTML = alerts.map(a => `
-            <tr class="hover:bg-surface-subtle transition-colors">
-                <td class="py-2 px-3 font-bold font-mono text-error">${a.plate_text}</td>
-                <td class="py-2 px-3">${a.camera_id}</td>
-                <td class="py-2 px-3 text-text-muted">${a.reason || 'Blacklist match'}</td>
-                <td class="py-2 px-3 font-mono text-[11px] text-text-muted">${a.created_at || '--'}</td>
-                <td class="py-2 px-3">
-                    ${a.acknowledged ? '<span class="text-text-muted text-[11px]">Acked</span>' : `<button onclick="ackAlert(${a.id})" class="px-2 py-0.5 rounded bg-primary text-white text-[10px] font-semibold hover:bg-primary-hover">Acknowledge</button>`}
-                </td>
-            </tr>
-        `).join('');
+        tbody.innerHTML = alerts.map(a => {
+            const sevClasses = {
+                'CRITICAL': 'bg-red-100 text-red-800 border-red-300 font-bold',
+                'HIGH': 'bg-orange-100 text-orange-800 border-orange-300 font-bold',
+                'MEDIUM': 'bg-amber-100 text-amber-800 border-amber-300 font-semibold',
+                'LOW': 'bg-blue-100 text-blue-800 border-blue-300',
+                'INFO': 'bg-gray-100 text-gray-800 border-gray-300',
+            }[a.severity] || 'bg-gray-100 text-gray-800';
+
+            const typeLabel = {
+                'BLACKLIST_EXACT': 'Watchlist Exact',
+                'BLACKLIST_FUZZY': 'Watchlist Fuzzy',
+                'VELOCITY_ANOMALY': 'Kinematic Speed',
+                'TEMPORAL_INVERSION': 'Temporal Anomaly',
+                'TOPOLOGY_VIOLATION': 'Topology Violation',
+                'IDENTITY_UNCERTAIN': 'Identity Ambiguity',
+                'EXCESSIVE_DWELL': 'Loitering / Dwell',
+                'RAPID_LOOPING': 'Corridor Looping',
+            }[a.alert_type] || a.alert_type;
+
+            const idDisplay = a.canonical_plate
+                ? `<span class="font-mono font-bold text-text-main">${a.canonical_plate}</span>`
+                : (a.global_id ? `<span class="font-mono text-primary">${a.global_id}</span>` : '--');
+
+            const jumpId = a.canonical_plate || a.global_id;
+            const jumpBtn = jumpId ? `
+                <button onclick="jumpToTrajectory('${jumpId}')" class="text-primary hover:underline text-[11px] flex items-center gap-0.5 mt-0.5 font-medium" title="Inspect Vehicle Trajectory">
+                    <span class="material-symbols-outlined text-xs">route</span> Inspect
+                </button>
+            ` : '';
+
+            const ackBtn = a.acknowledged
+                ? `<span class="text-text-muted text-[10px] font-semibold bg-surface-subtle px-1.5 py-0.5 rounded border border-border-light">Acked</span>`
+                : `<button onclick="ackAlert('${a.alert_id}')" class="px-2 py-0.5 rounded bg-primary text-white text-[10px] font-semibold hover:bg-primary-hover shadow-xs">Ack</button>`;
+
+            const timeStr = a.iso_timestamp ? a.iso_timestamp.replace('T', ' ').replace('Z', '') : '--';
+
+            return `
+                <tr class="hover:bg-surface-subtle transition-colors">
+                    <td class="py-2.5 px-3">
+                        <span class="px-2 py-0.5 rounded text-[10px] border ${sevClasses}">${a.severity}</span>
+                    </td>
+                    <td class="py-2.5 px-3 text-[11px] font-medium text-text-muted">${typeLabel}</td>
+                    <td class="py-2.5 px-3">
+                        ${idDisplay}
+                        ${jumpBtn}
+                    </td>
+                    <td class="py-2.5 px-3 font-semibold">${a.camera_id}</td>
+                    <td class="py-2.5 px-3">
+                        <div class="font-medium text-text-main text-[11px]">${a.title}</div>
+                        <div class="text-[10px] text-text-muted truncate max-w-xs" title="${a.description}">${a.description}</div>
+                    </td>
+                    <td class="py-2.5 px-3 font-mono text-[10px] text-text-muted">${timeStr}</td>
+                    <td class="py-2.5 px-3 text-right">
+                        ${ackBtn}
+                    </td>
+                </tr>
+            `;
+        }).join('');
     } catch (err) {
         console.error('Error loading alerts:', err);
     }
@@ -890,10 +1047,23 @@ async function loadAlerts() {
 
 async function ackAlert(alertId) {
     try {
-        await fetch(`/api/alerts/${alertId}/acknowledge`, { method: 'POST' });
-        loadAlerts();
-        loadDashboardStats();
+        await fetch(`/api/v1/alerts/${encodeURIComponent(alertId)}/acknowledge`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ operator: 'officer_console' }),
+        });
+        await loadAlerts();
+        await loadAlertsSummary();
     } catch (err) {
         console.error('Error acknowledging alert:', err);
     }
 }
+
+function jumpToTrajectory(identifier) {
+    if (!identifier) return;
+    switchTab('tabVehicleLookup', 'navVehicleLookup');
+    const pInput = document.getElementById('plateSearchInput');
+    if (pInput) pInput.value = identifier;
+    performVehicleSearch(identifier);
+}
+

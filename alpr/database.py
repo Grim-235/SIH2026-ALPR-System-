@@ -155,6 +155,55 @@ def init_db(db_path: str | Path) -> sqlite3.Connection:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_obs_plate ON vehicle_observations(canonical_plate)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_obs_ts ON vehicle_observations(last_timestamp)")
 
+    # Phase 7E: Security Alerts & Blacklist Extension
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS security_alerts (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_id            TEXT UNIQUE NOT NULL,
+            alert_type          TEXT NOT NULL,
+            severity            TEXT NOT NULL,
+            title               TEXT NOT NULL,
+            description         TEXT,
+            global_id           TEXT,
+            canonical_plate     TEXT,
+            camera_id           TEXT NOT NULL,
+            timestamp           REAL NOT NULL,
+            iso_timestamp       TEXT NOT NULL,
+            details_json        TEXT NOT NULL DEFAULT '{}',
+            acknowledged        INTEGER NOT NULL DEFAULT 0,
+            acknowledged_at     TEXT,
+            acknowledged_by     TEXT,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (camera_id) REFERENCES cameras(camera_id)
+        )
+    """)
+
+    # Enrich blacklist table with category, severity, notes, is_active if columns don't exist
+    try:
+        cursor.execute("ALTER TABLE blacklist ADD COLUMN category TEXT NOT NULL DEFAULT 'CUSTOM'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE blacklist ADD COLUMN severity TEXT NOT NULL DEFAULT 'HIGH'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE blacklist ADD COLUMN notes TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE blacklist ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sec_alerts_alert_id ON security_alerts(alert_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sec_alerts_type ON security_alerts(alert_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sec_alerts_sev ON security_alerts(severity)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sec_alerts_ack ON security_alerts(acknowledged)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sec_alerts_plate ON security_alerts(canonical_plate)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sec_alerts_gid ON security_alerts(global_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sec_alerts_ts ON security_alerts(timestamp)")
+
     conn.commit()
     return conn
 
@@ -820,3 +869,237 @@ def get_all_global_vehicles(
             d["representative_embedding"] = deserialize_embedding(d["representative_embedding"])
         results.append(d)
     return results
+
+
+# ============================================================================
+# PHASE 7E: SECURITY ALERTS & BLACKLIST PERSISTENCE HELPERS
+# ============================================================================
+
+def record_security_alert(
+    conn: sqlite3.Connection,
+    alert_id: str,
+    alert_type: str,
+    severity: str,
+    title: str,
+    description: Optional[str],
+    camera_id: str,
+    timestamp: float,
+    iso_timestamp: str,
+    global_id: Optional[str] = None,
+    canonical_plate: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Persist or update a security alert idempotently.
+    Returns the alert_id.
+    """
+    cursor = conn.cursor()
+    details_str = json.dumps(details or {})
+    cursor.execute(
+        """
+        INSERT INTO security_alerts (
+            alert_id, alert_type, severity, title, description,
+            global_id, canonical_plate, camera_id, timestamp, iso_timestamp,
+            details_json, acknowledged
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ON CONFLICT(alert_id) DO UPDATE SET
+            severity=excluded.severity,
+            title=excluded.title,
+            description=excluded.description,
+            details_json=excluded.details_json
+        """,
+        (
+            alert_id,
+            alert_type,
+            severity,
+            title,
+            description,
+            global_id,
+            canonical_plate,
+            camera_id,
+            timestamp,
+            iso_timestamp,
+            details_str,
+        ),
+    )
+    conn.commit()
+    return alert_id
+
+
+def get_security_alerts(
+    conn: sqlite3.Connection,
+    alert_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    only_unacknowledged: bool = False,
+    global_id: Optional[str] = None,
+    canonical_plate: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """
+    Query security alerts with flexible filtering.
+    """
+    cursor = conn.cursor()
+    query = "SELECT * FROM security_alerts WHERE 1=1"
+    params: List[Any] = []
+
+    if alert_type:
+        query += " AND alert_type = ?"
+        params.append(alert_type)
+    if severity:
+        query += " AND severity = ?"
+        params.append(severity)
+    if only_unacknowledged:
+        query += " AND acknowledged = 0"
+    if global_id:
+        query += " AND global_id = ?"
+        params.append(global_id)
+    if canonical_plate:
+        query += " AND canonical_plate = ?"
+        params.append(canonical_plate.upper())
+
+    query += " ORDER BY timestamp DESC, id DESC LIMIT ?"
+    params.append(limit)
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    results = []
+    for r in rows:
+        d = dict(r)
+        if d.get("details_json"):
+            try:
+                d["details"] = json.loads(d["details_json"])
+            except Exception:
+                d["details"] = {}
+        else:
+            d["details"] = {}
+        results.append(d)
+    return results
+
+
+def get_security_alert_by_id(conn: sqlite3.Connection, alert_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a single alert by its unique alert_id string."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM security_alerts WHERE alert_id = ?", (alert_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("details_json"):
+        try:
+            d["details"] = json.loads(d["details_json"])
+        except Exception:
+            d["details"] = {}
+    else:
+        d["details"] = {}
+    return d
+
+
+def acknowledge_security_alert(
+    conn: sqlite3.Connection,
+    alert_id: str,
+    acknowledged_by: str = "operator",
+) -> bool:
+    """Mark a security alert as acknowledged."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE security_alerts
+        SET acknowledged = 1,
+            acknowledged_at = datetime('now'),
+            acknowledged_by = ?
+        WHERE alert_id = ?
+        """,
+        (acknowledged_by, alert_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def get_security_alerts_summary(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Get aggregated alert metrics (total, unacknowledged, breakdown by severity and type)."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            COUNT(*) as total_alerts,
+            SUM(CASE WHEN acknowledged = 0 THEN 1 ELSE 0 END) as unacknowledged_count,
+            SUM(CASE WHEN severity = 'CRITICAL' AND acknowledged = 0 THEN 1 ELSE 0 END) as unack_critical,
+            SUM(CASE WHEN severity = 'HIGH' AND acknowledged = 0 THEN 1 ELSE 0 END) as unack_high,
+            SUM(CASE WHEN severity = 'MEDIUM' AND acknowledged = 0 THEN 1 ELSE 0 END) as unack_medium,
+            SUM(CASE WHEN severity = 'LOW' AND acknowledged = 0 THEN 1 ELSE 0 END) as unack_low,
+            SUM(CASE WHEN severity = 'INFO' AND acknowledged = 0 THEN 1 ELSE 0 END) as unack_info
+        FROM security_alerts
+    """)
+    row = cursor.fetchone()
+    summary = {
+        "total_alerts": row["total_alerts"] or 0,
+        "unacknowledged_count": row["unacknowledged_count"] or 0,
+        "unack_by_severity": {
+            "CRITICAL": row["unack_critical"] or 0,
+            "HIGH": row["unack_high"] or 0,
+            "MEDIUM": row["unack_medium"] or 0,
+            "LOW": row["unack_low"] or 0,
+            "INFO": row["unack_info"] or 0,
+        },
+        "by_type": {},
+    }
+
+    cursor.execute("""
+        SELECT alert_type, COUNT(*) as count
+        FROM security_alerts
+        GROUP BY alert_type
+    """)
+    for r in cursor.fetchall():
+        summary["by_type"][r["alert_type"]] = r["count"]
+
+    return summary
+
+
+def add_enriched_blacklist_entry(
+    conn: sqlite3.Connection,
+    plate_text: str,
+    category: str = "CUSTOM",
+    reason: Optional[str] = None,
+    severity: str = "HIGH",
+    notes: Optional[str] = None,
+) -> bool:
+    """Add or update an enriched blacklist entry."""
+    cursor = conn.cursor()
+    plate = plate_text.strip().upper()
+    cat = category.strip().upper()
+    sev = severity.strip().upper()
+    cursor.execute(
+        """
+        INSERT INTO blacklist (plate_text, category, reason, severity, notes, is_active)
+        VALUES (?, ?, ?, ?, ?, 1)
+        ON CONFLICT(plate_text) DO UPDATE SET
+            category=excluded.category,
+            reason=excluded.reason,
+            severity=excluded.severity,
+            notes=excluded.notes,
+            is_active=1
+        """,
+        (plate, cat, reason or "Flagged", sev, notes),
+    )
+    conn.commit()
+    return True
+
+
+def get_enriched_blacklist(
+    conn: sqlite3.Connection,
+    category: Optional[str] = None,
+    active_only: bool = True,
+) -> List[Dict[str, Any]]:
+    """Retrieve blacklist entries with category and severity."""
+    cursor = conn.cursor()
+    query = "SELECT * FROM blacklist WHERE 1=1"
+    params: List[Any] = []
+    if active_only:
+        query += " AND is_active = 1"
+    if category:
+        query += " AND category = ?"
+        params.append(category.upper())
+    query += " ORDER BY added_at DESC"
+    cursor.execute(query, params)
+    return [dict(r) for r in cursor.fetchall()]
+

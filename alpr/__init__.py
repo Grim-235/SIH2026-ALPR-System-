@@ -78,3 +78,30 @@ from alpr.service import (
     DashboardService,
     get_dashboard_service,
 )
+from alpr.alerts import (
+    AlertRecord,
+    AlertEngine,
+    evaluate_blacklist_match,
+    evaluate_kinematic_anomalies,
+    evaluate_topological_anomalies,
+    evaluate_identity_uncertainty,
+    evaluate_behavioral_anomalies,
+    ALERT_BLACKLIST_EXACT,
+    ALERT_BLACKLIST_FUZZY,
+    ALERT_VELOCITY_ANOMALY,
+    ALERT_TEMPORAL_INVERSION,
+    ALERT_TOPOLOGY_VIOLATION,
+    ALERT_IDENTITY_UNCERTAIN,
+    ALERT_EXCESSIVE_DWELL,
+    ALERT_RAPID_LOOPING,
+)
+from alpr.database import (
+    record_security_alert,
+    get_security_alerts,
+    get_security_alert_by_id,
+    acknowledge_security_alert,
+    get_security_alerts_summary,
+    add_enriched_blacklist_entry,
+    get_enriched_blacklist,
+)
+
