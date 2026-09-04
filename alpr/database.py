@@ -756,6 +756,22 @@ def get_global_vehicle(conn: sqlite3.Connection, global_id: str) -> Optional[dic
     return d
 
 
+def get_global_vehicle_by_plate(conn: sqlite3.Connection, plate_text: str) -> Optional[dict]:
+    """Retrieve a global vehicle record by canonical_plate."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM global_vehicles WHERE canonical_plate = ? ORDER BY last_seen_ts DESC LIMIT 1",
+        (plate_text,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("representative_embedding"):
+        d["representative_embedding"] = deserialize_embedding(d["representative_embedding"])
+    return d
+
+
 def get_vehicle_trajectory(conn: sqlite3.Connection, global_id: str) -> List[dict]:
     """
     Retrieve all sightings/observations for a global vehicle, ordered chronologically.

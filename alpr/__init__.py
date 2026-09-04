@@ -39,6 +39,17 @@ from alpr.database import (
     save_global_identity,
     record_vehicle_observation,
     get_global_vehicle,
+    get_global_vehicle_by_plate,
     get_vehicle_trajectory,
     get_all_global_vehicles,
+)
+from alpr.trajectory import (
+    haversine_distance_km,
+    TrajectoryNode,
+    TrajectorySegment,
+    VehicleTrajectory,
+    TrajectoryReconstructor,
+    reconstruct_trajectory,
+    reconstruct_trajectory_by_plate,
+    list_all_trajectories,
 )
