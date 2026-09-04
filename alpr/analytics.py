@@ -119,8 +119,8 @@ class CorridorAnalytics:
     observation_count: int                    # Total transit observations (N)
     valid_observation_count: int              # Observations with zero anomalies
     anomalous_observation_count: int          # Observations with >= 1 anomaly
-    network_distance_km: Optional[float]      # Road network shortest path distance
-    haversine_distance_km: Optional[float]    # Straight-line air distance reference
+    network_distance_km: Optional[float] = None      # Road network shortest path distance
+    haversine_distance_km: Optional[float] = None    # Straight-line air distance reference
 
     # Travel Time Metrics (seconds)
     travel_time_mean_s: Optional[float] = None

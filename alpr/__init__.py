@@ -60,3 +60,12 @@ from alpr.analytics import (
     CorridorAnalyticsEngine,
     analyze_network_traffic,
 )
+from alpr.congestion import (
+    CameraNodeFlowMetrics,
+    CorridorCongestionMetrics,
+    NetworkCongestionReport,
+    TrafficCongestionEngine,
+    analyze_traffic_congestion,
+    classify_los_proxy,
+    compute_interval_union_duration,
+)
