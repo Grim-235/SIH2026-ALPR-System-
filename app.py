@@ -452,15 +452,29 @@ def api_vehicle_trajectory(identifier):
     status_code, result = dashboard_service.search_vehicle(identifier, conn)
     return jsonify(result), status_code
 
+# ============================================================================
+# PHASE 8: SYSTEM HEALTH & LIVE TELEMETRY REST API
+# ============================================================================
+
+@app.route('/api/v1/system/health', methods=['GET'])
+@app.route('/api/system/health', methods=['GET'])
+def api_system_health():
+    """Overall system health status, active worker counts, and throughput metrics."""
+    health = dashboard_service.get_system_health(conn=conn)
+    return jsonify(health)
+
+@app.route('/api/v1/system/cameras', methods=['GET'])
+@app.route('/api/system/cameras', methods=['GET'])
+def api_system_cameras():
+    """Live camera node statuses, FPS, latency, and detection counts."""
+    cameras = dashboard_service.get_camera_statuses(conn=conn)
+    return jsonify(cameras)
+
 @app.route('/api/cameras', methods=['GET'])
 def api_cameras():
-    """Get all cameras"""
-    try:
-        with open("cameras.json", "r") as f:
-            cameras = json.load(f)
-        return jsonify(cameras)
-    except:
-        return jsonify([])
+    """Get all cameras with live status and telemetry."""
+    cameras = dashboard_service.get_camera_statuses(conn=conn)
+    return jsonify(cameras)
 
 @app.route('/api/cameras', methods=['POST'])
 def api_create_camera():

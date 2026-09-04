@@ -103,5 +103,14 @@ from alpr.database import (
     get_security_alerts_summary,
     add_enriched_blacklist_entry,
     get_enriched_blacklist,
+    get_thread_connection,
+    update_camera_status,
+    get_camera_statuses,
+    record_security_alert_obj,
+    execute_with_retry,
+)
+from workers.orchestrator import (
+    PipelineOrchestrator,
+    CameraTelemetry,
 )
 

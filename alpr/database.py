@@ -1,7 +1,10 @@
 import json
+import random
 import sqlite3
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -204,8 +207,150 @@ def init_db(db_path: str | Path) -> sqlite3.Connection:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sec_alerts_gid ON security_alerts(global_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sec_alerts_ts ON security_alerts(timestamp)")
 
+    # Phase 8: Camera Live Telemetry & Status
+    for col_def in [
+        ("status", "TEXT NOT NULL DEFAULT 'offline'"),
+        ("fps", "REAL NOT NULL DEFAULT 0.0"),
+        ("latency_ms", "REAL NOT NULL DEFAULT 0.0"),
+        ("last_seen_ts", "REAL"),
+        ("total_frames", "INTEGER NOT NULL DEFAULT 0"),
+        ("total_detections", "INTEGER NOT NULL DEFAULT 0"),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE cameras ADD COLUMN {col_def[0]} {col_def[1]}")
+        except sqlite3.OperationalError:
+            pass
+
     conn.commit()
     return conn
+
+
+_thread_local = threading.local()
+
+
+def get_thread_connection(db_path: Union[str, Path], timeout: float = 30.0) -> sqlite3.Connection:
+    """
+    Return a thread-isolated SQLite connection configured for concurrent WAL access.
+    Caches connections per thread and per database path.
+    """
+    path_str = str(Path(db_path).resolve())
+    if not hasattr(_thread_local, "connections"):
+        _thread_local.connections = {}
+
+    conn = _thread_local.connections.get(path_str)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except (sqlite3.ProgrammingError, sqlite3.OperationalError):
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _thread_local.connections.pop(path_str, None)
+
+    conn = sqlite3.connect(path_str, check_same_thread=False, timeout=timeout)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA busy_timeout=30000;")
+    cursor.execute("PRAGMA synchronous=NORMAL;")
+    _thread_local.connections[path_str] = conn
+    return conn
+
+
+def execute_with_retry(
+    func: Callable[..., Any],
+    *args,
+    max_retries: int = 5,
+    base_delay: float = 0.05,
+    max_delay: float = 1.0,
+    **kwargs,
+) -> Any:
+    """
+    Execute a database write function with exponential backoff retry on
+    sqlite3.OperationalError (database locked / busy).
+    """
+    retries = 0
+    while True:
+        try:
+            return func(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if ("locked" in msg or "busy" in msg) and retries < max_retries:
+                retries += 1
+                sleep_time = min(max_delay, base_delay * (2 ** (retries - 1)) + random.uniform(0.01, 0.05))
+                time.sleep(sleep_time)
+            else:
+                raise
+
+
+def update_camera_status(
+    conn: sqlite3.Connection,
+    camera_id: str,
+    status: Optional[str] = None,
+    fps: Optional[float] = None,
+    latency_ms: Optional[float] = None,
+    last_seen_ts: Optional[float] = None,
+    total_frames: Optional[int] = None,
+    total_detections: Optional[int] = None,
+) -> bool:
+    """
+    Update live status and operational telemetry for a camera with retry handling.
+    """
+    fields = []
+    params = []
+    if status is not None:
+        fields.append("status = ?")
+        params.append(str(status))
+    if fps is not None:
+        fields.append("fps = ?")
+        params.append(float(fps))
+    if latency_ms is not None:
+        fields.append("latency_ms = ?")
+        params.append(float(latency_ms))
+    if last_seen_ts is not None:
+        fields.append("last_seen_ts = ?")
+        params.append(float(last_seen_ts))
+    if total_frames is not None:
+        fields.append("total_frames = ?")
+        params.append(int(total_frames))
+    if total_detections is not None:
+        fields.append("total_detections = ?")
+        params.append(int(total_detections))
+
+    if not fields:
+        return False
+
+    params.append(camera_id)
+    sql = f"UPDATE cameras SET {', '.join(fields)} WHERE camera_id = ?"
+
+    def _do_update():
+        cursor = conn.cursor()
+        cursor.execute(sql, params)
+        conn.commit()
+        return cursor.rowcount > 0
+
+    return execute_with_retry(_do_update)
+
+
+def get_camera_statuses(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """Retrieve all camera records with live status and telemetry."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM cameras ORDER BY camera_id ASC")
+    rows = cursor.fetchall()
+    if not rows:
+        return []
+    col_names = [d[0] for d in cursor.description]
+    results = []
+    for r in rows:
+        if isinstance(r, sqlite3.Row):
+            results.append(dict(r))
+        elif isinstance(r, dict):
+            results.append(r)
+        else:
+            results.append(dict(zip(col_names, r)))
+    return results
 
 
 def upsert_camera(
@@ -681,43 +826,46 @@ def deserialize_embedding(blob: Optional[bytes]) -> Optional[np.ndarray]:
 
 def save_global_identity(conn: sqlite3.Connection, identity: Any) -> None:
     """
-    Insert or update a GlobalVehicleIdentity in the database.
+    Insert or update a GlobalVehicleIdentity in the database with retry handling.
     """
-    cursor = conn.cursor()
     emb_blob = serialize_embedding(identity.representative_embedding)
-    cursor.execute(
-        """
-        INSERT INTO global_vehicles (
-            global_id, canonical_plate, plate_confidence, vehicle_type,
-            first_seen_ts, last_seen_ts, first_camera_id, last_camera_id,
-            sighting_count, status, representative_embedding, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-        ON CONFLICT(global_id) DO UPDATE SET
-            canonical_plate = excluded.canonical_plate,
-            plate_confidence = excluded.plate_confidence,
-            vehicle_type = excluded.vehicle_type,
-            last_seen_ts = excluded.last_seen_ts,
-            last_camera_id = excluded.last_camera_id,
-            sighting_count = excluded.sighting_count,
-            status = excluded.status,
-            representative_embedding = COALESCE(excluded.representative_embedding, global_vehicles.representative_embedding),
-            updated_at = datetime('now')
-        """,
-        (
-            identity.global_id,
-            identity.canonical_plate,
-            float(identity.plate_confidence),
-            identity.vehicle_type,
-            float(identity.first_seen_ts),
-            float(identity.last_seen_ts),
-            identity.first_camera_id,
-            identity.last_camera_id,
-            int(identity.sighting_count),
-            identity.status,
-            emb_blob,
-        ),
-    )
-    conn.commit()
+    def _do_save():
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO global_vehicles (
+                global_id, canonical_plate, plate_confidence, vehicle_type,
+                first_seen_ts, last_seen_ts, first_camera_id, last_camera_id,
+                sighting_count, status, representative_embedding, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(global_id) DO UPDATE SET
+                canonical_plate = excluded.canonical_plate,
+                plate_confidence = excluded.plate_confidence,
+                vehicle_type = excluded.vehicle_type,
+                last_seen_ts = excluded.last_seen_ts,
+                last_camera_id = excluded.last_camera_id,
+                sighting_count = excluded.sighting_count,
+                status = excluded.status,
+                representative_embedding = COALESCE(excluded.representative_embedding, global_vehicles.representative_embedding),
+                updated_at = datetime('now')
+            """,
+            (
+                identity.global_id,
+                identity.canonical_plate,
+                float(identity.plate_confidence),
+                identity.vehicle_type,
+                float(identity.first_seen_ts),
+                float(identity.last_seen_ts),
+                identity.first_camera_id,
+                identity.last_camera_id,
+                int(identity.sighting_count),
+                identity.status,
+                emb_blob,
+            ),
+        )
+        conn.commit()
+
+    execute_with_retry(_do_save)
 
 
 def record_vehicle_observation(
@@ -727,9 +875,8 @@ def record_vehicle_observation(
     first_timestamp: Optional[float] = None,
 ) -> bool:
     """
-    Insert or update a finalized vehicle observation (idempotent on camera_id, local_track_id).
+    Insert or update a finalized vehicle observation with retry handling (idempotent on camera_id, local_track_id).
     """
-    cursor = conn.cursor()
     emb_blob = serialize_embedding(obs.best_reid_embedding)
     first_ts = float(first_timestamp) if first_timestamp is not None else float(obs.timestamp)
     last_ts = float(obs.timestamp)
@@ -738,58 +885,62 @@ def record_vehicle_observation(
     if obs.bbox is not None and len(obs.bbox) == 4:
         bbox_x1, bbox_y1, bbox_x2, bbox_y2 = (int(v) for v in obs.bbox)
 
-    cursor.execute(
-        """
-        INSERT INTO vehicle_observations (
-            global_id, camera_id, local_track_id, first_timestamp, last_timestamp,
-            vehicle_type, canonical_plate, plate_confidence, crop_quality,
-            reid_embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2,
-            match_status, match_confidence, match_method, plate_similarity,
-            reid_similarity, transit_speed_kmh, distance_km, match_reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(camera_id, local_track_id) DO UPDATE SET
-            global_id = excluded.global_id,
-            last_timestamp = excluded.last_timestamp,
-            canonical_plate = excluded.canonical_plate,
-            plate_confidence = excluded.plate_confidence,
-            crop_quality = excluded.crop_quality,
-            reid_embedding = COALESCE(excluded.reid_embedding, vehicle_observations.reid_embedding),
-            match_status = excluded.match_status,
-            match_confidence = excluded.match_confidence,
-            match_method = excluded.match_method,
-            plate_similarity = excluded.plate_similarity,
-            reid_similarity = excluded.reid_similarity,
-            transit_speed_kmh = excluded.transit_speed_kmh,
-            distance_km = excluded.distance_km,
-            match_reason = excluded.match_reason
-        """,
-        (
-            match_result.global_id,
-            obs.camera_id,
-            int(obs.track_id),
-            first_ts,
-            last_ts,
-            obs.vehicle_type,
-            obs.canonical_plate,
-            float(obs.plate_confidence),
-            float(obs.crop_quality),
-            emb_blob,
-            bbox_x1,
-            bbox_y1,
-            bbox_x2,
-            bbox_y2,
-            match_result.status,
-            float(match_result.confidence),
-            match_result.match_method,
-            float(match_result.plate_similarity) if match_result.plate_similarity is not None else None,
-            float(match_result.reid_similarity) if match_result.reid_similarity is not None else None,
-            float(match_result.transit_speed_kmh) if match_result.transit_speed_kmh is not None else None,
-            float(match_result.distance_km) if match_result.distance_km is not None else None,
-            match_result.reason,
-        ),
-    )
-    conn.commit()
-    return True
+    def _do_record():
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO vehicle_observations (
+                global_id, camera_id, local_track_id, first_timestamp, last_timestamp,
+                vehicle_type, canonical_plate, plate_confidence, crop_quality,
+                reid_embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+                match_status, match_confidence, match_method, plate_similarity,
+                reid_similarity, transit_speed_kmh, distance_km, match_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(camera_id, local_track_id) DO UPDATE SET
+                global_id = excluded.global_id,
+                last_timestamp = excluded.last_timestamp,
+                canonical_plate = excluded.canonical_plate,
+                plate_confidence = excluded.plate_confidence,
+                crop_quality = excluded.crop_quality,
+                reid_embedding = COALESCE(excluded.reid_embedding, vehicle_observations.reid_embedding),
+                match_status = excluded.match_status,
+                match_confidence = excluded.match_confidence,
+                match_method = excluded.match_method,
+                plate_similarity = excluded.plate_similarity,
+                reid_similarity = excluded.reid_similarity,
+                transit_speed_kmh = excluded.transit_speed_kmh,
+                distance_km = excluded.distance_km,
+                match_reason = excluded.match_reason
+            """,
+            (
+                match_result.global_id,
+                obs.camera_id,
+                int(obs.track_id),
+                first_ts,
+                last_ts,
+                obs.vehicle_type,
+                obs.canonical_plate,
+                float(obs.plate_confidence),
+                float(obs.crop_quality),
+                emb_blob,
+                bbox_x1,
+                bbox_y1,
+                bbox_x2,
+                bbox_y2,
+                match_result.status,
+                float(match_result.confidence),
+                match_result.match_method,
+                float(match_result.plate_similarity) if match_result.plate_similarity is not None else None,
+                float(match_result.reid_similarity) if match_result.reid_similarity is not None else None,
+                float(match_result.transit_speed_kmh) if match_result.transit_speed_kmh is not None else None,
+                float(match_result.distance_km) if match_result.distance_km is not None else None,
+                match_result.reason,
+            ),
+        )
+        conn.commit()
+        return True
+
+    return execute_with_retry(_do_record)
 
 
 def get_global_vehicle(conn: sqlite3.Connection, global_id: str) -> Optional[dict]:
@@ -890,41 +1041,63 @@ def record_security_alert(
     details: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
-    Persist or update a security alert idempotently.
+    Persist or update a security alert idempotently with retry handling.
     Returns the alert_id.
     """
-    cursor = conn.cursor()
     details_str = json.dumps(details or {})
-    cursor.execute(
-        """
-        INSERT INTO security_alerts (
-            alert_id, alert_type, severity, title, description,
-            global_id, canonical_plate, camera_id, timestamp, iso_timestamp,
-            details_json, acknowledged
+
+    def _do_record():
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO security_alerts (
+                alert_id, alert_type, severity, title, description,
+                global_id, canonical_plate, camera_id, timestamp, iso_timestamp,
+                details_json, acknowledged
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ON CONFLICT(alert_id) DO UPDATE SET
+                severity=excluded.severity,
+                title=excluded.title,
+                description=excluded.description,
+                details_json=excluded.details_json
+            """,
+            (
+                alert_id,
+                alert_type,
+                severity,
+                title,
+                description,
+                global_id,
+                canonical_plate,
+                camera_id,
+                timestamp,
+                iso_timestamp,
+                details_str,
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        ON CONFLICT(alert_id) DO UPDATE SET
-            severity=excluded.severity,
-            title=excluded.title,
-            description=excluded.description,
-            details_json=excluded.details_json
-        """,
-        (
-            alert_id,
-            alert_type,
-            severity,
-            title,
-            description,
-            global_id,
-            canonical_plate,
-            camera_id,
-            timestamp,
-            iso_timestamp,
-            details_str,
-        ),
+        conn.commit()
+        return alert_id
+
+    return execute_with_retry(_do_record)
+
+
+def record_security_alert_obj(conn: sqlite3.Connection, alert: Any) -> str:
+    """Convenience helper to record an AlertRecord object into security_alerts table."""
+    return record_security_alert(
+        conn=conn,
+        alert_id=alert.alert_id,
+        alert_type=alert.alert_type,
+        severity=alert.severity,
+        title=alert.title,
+        description=alert.description,
+        camera_id=alert.camera_id,
+        timestamp=alert.timestamp,
+        iso_timestamp=alert.iso_timestamp,
+        global_id=alert.global_id,
+        canonical_plate=alert.canonical_plate,
+        details=getattr(alert, "details", {}),
     )
-    conn.commit()
-    return alert_id
 
 
 def get_security_alerts(

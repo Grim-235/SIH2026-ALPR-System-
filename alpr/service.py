@@ -34,6 +34,9 @@ from alpr.database import (
     add_enriched_blacklist_entry,
     get_enriched_blacklist,
     remove_from_blacklist,
+    get_camera_statuses,
+    update_camera_status,
+    get_thread_connection,
 )
 from alpr.trajectory import (
     VehicleTrajectory,
@@ -546,6 +549,79 @@ class DashboardService:
                 "alerts_evaluated": total_discovered,
                 "summary": summary,
             }
+        finally:
+            if conn is None:
+                c.close()
+
+    # ── Layer 5: System Telemetry & Health Monitoring (Phase 8) ──
+
+    def get_system_health(
+        self,
+        conn: Optional[sqlite3.Connection] = None,
+        orchestrator: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Aggregate overall system health, uptime, active camera count, and throughput.
+        If a running PipelineOrchestrator instance is supplied, consumes live supervisor telemetry.
+        """
+        if orchestrator is not None and hasattr(orchestrator, "get_health"):
+            return orchestrator.get_health()
+
+        c = conn or self._get_connection()
+        try:
+            cameras = get_camera_statuses(c)
+            total_cams = len(cameras)
+            active_cams = sum(1 for cam in cameras if cam.get("status") in ("online", "running"))
+            reconnecting_cams = sum(1 for cam in cameras if cam.get("status") == "reconnecting")
+            offline_cams = total_cams - active_cams - reconnecting_cams
+            total_fps = sum(float(cam.get("fps", 0.0) or 0.0) for cam in cameras)
+            latencies = [float(cam.get("latency_ms", 0.0)) for cam in cameras if cam.get("latency_ms")]
+            avg_latency = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
+            total_frames = sum(int(cam.get("total_frames", 0) or 0) for cam in cameras)
+            total_detections = sum(int(cam.get("total_detections", 0) or 0) for cam in cameras)
+
+            if active_cams == total_cams and total_cams > 0:
+                system_status = "healthy"
+            elif active_cams > 0 or reconnecting_cams > 0:
+                system_status = "degraded"
+            else:
+                system_status = "offline"
+
+            iso_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            return {
+                "status": system_status,
+                "timestamp": iso_now,
+                "orchestrator_running": False,
+                "uptime_seconds": 0.0,
+                "total_cameras": total_cams,
+                "active_cameras": active_cams,
+                "reconnecting_cameras": reconnecting_cams,
+                "offline_cameras": offline_cams,
+                "total_fps": round(total_fps, 2),
+                "avg_latency_ms": avg_latency,
+                "total_frames_processed": total_frames,
+                "total_vehicles_detected": total_detections,
+                "cameras": {cam["camera_id"]: dict(cam) for cam in cameras},
+            }
+        finally:
+            if conn is None:
+                c.close()
+
+    def get_camera_statuses(
+        self,
+        conn: Optional[sqlite3.Connection] = None,
+        orchestrator: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve live status and operational telemetry for all camera nodes.
+        """
+        if orchestrator is not None and hasattr(orchestrator, "get_camera_statuses"):
+            return orchestrator.get_camera_statuses()
+
+        c = conn or self._get_connection()
+        try:
+            return get_camera_statuses(c)
         finally:
             if conn is None:
                 c.close()

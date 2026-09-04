@@ -11,6 +11,7 @@ using a strict two-stage decision process:
 import json
 import logging
 import math
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -230,6 +231,7 @@ class GlobalIdentityResolver:
         # Global identities storage (in-memory for engine)
         self.identities: Dict[str, GlobalVehicleIdentity] = {}
         self._next_id_counter = 1
+        self._lock = threading.Lock()
 
         # Camera graph shortest paths: distances_km[cam_a][cam_b]
         self.distances_km: Dict[str, Dict[str, float]] = {}
@@ -415,10 +417,15 @@ class GlobalIdentityResolver:
     def resolve_observation(self, obs: VehicleObservation) -> Tuple[GlobalVehicleIdentity, IdentityMatchResult]:
         """
         Process a single vehicle observation and resolve its global identity.
+        Thread-safe across multiple concurrent camera workers.
 
         Returns:
             (global_identity, match_result)
         """
+        with self._lock:
+            return self._resolve_observation_locked(obs)
+
+    def _resolve_observation_locked(self, obs: VehicleObservation) -> Tuple[GlobalVehicleIdentity, IdentityMatchResult]:
         feasible_candidates: List[Tuple[GlobalVehicleIdentity, float, Dict[str, Any], float, float]] = []
 
         for candidate in self.identities.values():

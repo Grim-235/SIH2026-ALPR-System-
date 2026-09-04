@@ -43,10 +43,22 @@ from alpr.identity import (
     VehicleObservation,
     IdentityMatchResult,
 )
+from alpr.alerts import (
+    AlertEngine,
+    AlertRecord,
+    ALERT_VELOCITY_ANOMALY,
+    SEVERITY_HIGH,
+    generate_alert_id,
+    format_iso_timestamp,
+)
 from alpr.database import (
     init_db,
     save_global_identity,
     record_vehicle_observation,
+    get_thread_connection,
+    update_camera_status,
+    record_security_alert_obj,
+    get_enriched_blacklist,
 )
 
 # Configure logging
@@ -78,12 +90,15 @@ class CameraWorker:
         reid: Optional[VehicleReID] = None,
         reid_every_n: int = 15,
         identity_resolver: Optional[GlobalIdentityResolver] = None,
+        alert_engine: Optional[AlertEngine] = None,
+        blacklist_records: Optional[List[Dict[str, Any]]] = None,
         db_path: Optional[Union[str, Path]] = None,
         on_detections: Optional[Callable[[str, np.ndarray, List[VehicleDetection], float, float], None]] = None,
         on_tracks: Optional[Callable[[str, np.ndarray, List[ActiveVehicleTrack], float, float], None]] = None,
         on_plate_read: Optional[Callable[[str, int, PlateRead], None]] = None,
         on_reid_extracted: Optional[Callable[[str, int, np.ndarray], None]] = None,
         on_global_identity_resolved: Optional[Callable[[str, GlobalVehicleIdentity, IdentityMatchResult], None]] = None,
+        on_alert_triggered: Optional[Callable[[str, AlertRecord], None]] = None,
     ):
         """
         Initialize a camera worker.
@@ -99,12 +114,15 @@ class CameraWorker:
             reid: Optional VehicleReID instance (for visual appearance ReID).
             reid_every_n: Throttle interval for representative ReID feature extraction.
             identity_resolver: Optional GlobalIdentityResolver instance for multi-camera tracking.
+            alert_engine: Optional AlertEngine instance for online threat & anomaly diagnostics.
+            blacklist_records: Optional pre-loaded watchlist records.
             db_path: Optional path to SQLite database for persisting global identities.
             on_detections: Optional callback(camera_id, frame, detections, latency_ms, capture_ts).
             on_tracks: Optional callback(camera_id, frame, active_tracks, latency_ms, capture_ts).
             on_plate_read: Optional callback(camera_id, track_id, plate_read).
             on_reid_extracted: Optional callback(camera_id, track_id, embedding).
             on_global_identity_resolved: Optional callback(camera_id, identity, result).
+            on_alert_triggered: Optional callback(camera_id, alert_record).
         """
         self.camera_id = camera_id
         self.source = source
@@ -116,12 +134,15 @@ class CameraWorker:
         self.reid = reid
         self.reid_every_n = reid_every_n
         self.identity_resolver = identity_resolver
+        self.alert_engine = alert_engine
+        self.blacklist_records = blacklist_records
         self.db_path = db_path
         self.on_detections = on_detections
         self.on_tracks = on_tracks
         self.on_plate_read = on_plate_read
         self.on_reid_extracted = on_reid_extracted
         self.on_global_identity_resolved = on_global_identity_resolved
+        self.on_alert_triggered = on_alert_triggered
 
         self._running = False
         self._camera: Optional[CameraSource] = None
@@ -134,6 +155,7 @@ class CameraWorker:
         self.plates_detected = 0
         self.reid_extractions = 0
         self.identities_resolved = 0
+        self.alerts_triggered = 0
         self._latencies: deque = deque(maxlen=30)
         self._proc_times: deque = deque(maxlen=30)
         self._vehicle_counts: deque = deque(maxlen=30)
@@ -188,7 +210,7 @@ class CameraWorker:
         return sum(self._vehicle_counts) / len(self._vehicle_counts)
 
     def _process_finalized_track(self, trk: VehicleTrackState) -> None:
-        """Process a finalized vehicle track through identity resolution and database persistence."""
+        """Process a finalized vehicle track through identity resolution, online alerts, and database persistence."""
         if self.identity_resolver is None:
             return
 
@@ -207,15 +229,103 @@ class CameraWorker:
         identity, result = self.identity_resolver.resolve_observation(obs)
         self.identities_resolved += 1
 
+        # Online alert evaluation if AlertEngine is provided
+        generated_alerts: List[AlertRecord] = []
+        if self.alert_engine is not None:
+            try:
+                bl_records = self.blacklist_records
+                if bl_records is None and self.db_path:
+                    try:
+                        conn_bl = get_thread_connection(self.db_path)
+                        bl_records = get_enriched_blacklist(conn_bl, active_only=True)
+                        self.blacklist_records = bl_records
+                    except Exception:
+                        bl_records = []
+
+                obs_alerts = self.alert_engine.evaluate_observation(
+                    camera_id=self.camera_id,
+                    timestamp=trk.last_timestamp,
+                    plate_text=trk.canonical_plate,
+                    global_id=identity.global_id,
+                    match_status=result.status,
+                    match_confidence=result.confidence,
+                    match_method=result.match_method,
+                    blacklist_records=bl_records,
+                )
+                generated_alerts.extend(obs_alerts)
+
+                # Kinematic plausibility diagnostic
+                kine_speed = result.transit_speed_kmh
+                kine_dist = result.distance_km
+                kine_gid = identity.global_id
+
+                # If resolver rejected transit feasibility due to impossible speed for same plate:
+                if kine_speed is None and trk.canonical_plate and self.identity_resolver is not None:
+                    for prev_ident in list(self.identity_resolver.identities.values()):
+                        if prev_ident.global_id != identity.global_id and prev_ident.canonical_plate == trk.canonical_plate:
+                            dist = self.identity_resolver.get_distance_km(prev_ident.last_camera_id, self.camera_id)
+                            delta_t = trk.last_timestamp - prev_ident.last_seen_ts
+                            if dist is not None and delta_t > 0:
+                                calc_speed = (dist / delta_t) * 3600.0
+                                if calc_speed > self.alert_engine.velocity_bound_kmh:
+                                    kine_speed = calc_speed
+                                    kine_dist = dist
+                                    kine_gid = prev_ident.global_id
+                                    break
+
+                if (
+                    kine_speed is not None
+                    and kine_speed > self.alert_engine.velocity_bound_kmh
+                ):
+                    aid = generate_alert_id(
+                        ALERT_VELOCITY_ANOMALY,
+                        self.camera_id,
+                        trk.last_timestamp,
+                        f"KINE:{kine_gid}:{kine_speed:.1f}",
+                    )
+                    kine_alert = AlertRecord(
+                        alert_id=aid,
+                        alert_type=ALERT_VELOCITY_ANOMALY,
+                        severity=SEVERITY_HIGH,
+                        title=f"Diagnostic: Physical Velocity Bound Exceeded ({kine_speed:.1f} km/h)",
+                        description=(
+                            f"Observed speed {kine_speed:.1f} km/h exceeds plausibility bound "
+                            f"({self.alert_engine.velocity_bound_kmh:.1f} km/h). Diagnostic flag."
+                        ),
+                        camera_id=self.camera_id,
+                        timestamp=trk.last_timestamp,
+                        iso_timestamp=format_iso_timestamp(trk.last_timestamp),
+                        global_id=kine_gid,
+                        canonical_plate=trk.canonical_plate,
+                        details={
+                            "transit_speed_kmh": round(kine_speed, 2),
+                            "velocity_bound_kmh": self.alert_engine.velocity_bound_kmh,
+                            "distance_km": kine_dist,
+                        },
+                    )
+                    generated_alerts.append(kine_alert)
+
+                self.alerts_triggered += len(generated_alerts)
+            except Exception as alert_err:
+                logger.error(f"[{self.camera_id}] Error in online alert evaluation: {alert_err}")
+
         if self.db_path:
             try:
-                import sqlite3
-                conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+                conn = get_thread_connection(self.db_path)
                 save_global_identity(conn, identity)
                 record_vehicle_observation(conn, obs, result, first_timestamp=trk.first_timestamp)
-                conn.close()
+                for alert in generated_alerts:
+                    record_security_alert_obj(conn, alert)
             except Exception as e:
-                logger.error(f"[{self.camera_id}] Error saving identity to DB: {e}")
+                logger.error(f"[{self.camera_id}] Error saving identity/alerts to DB: {e}")
+
+        # Dispatch callbacks
+        if generated_alerts and self.on_alert_triggered:
+            for alert in generated_alerts:
+                try:
+                    self.on_alert_triggered(self.camera_id, alert)
+                except Exception as cb_err:
+                    logger.error(f"[{self.camera_id}] Alert callback error: {cb_err}")
 
         if self.on_global_identity_resolved:
             try:
@@ -457,6 +567,22 @@ class CameraWorker:
             self._camera.release()
             self._camera = None
 
+        if self.db_path:
+            try:
+                conn = get_thread_connection(self.db_path)
+                update_camera_status(
+                    conn=conn,
+                    camera_id=self.camera_id,
+                    status="offline",
+                    fps=0.0,
+                    latency_ms=self.avg_latency_ms,
+                    last_seen_ts=time.time(),
+                    total_frames=self.frames_processed,
+                    total_detections=self.vehicles_detected,
+                )
+            except Exception as e:
+                logger.debug(f"[{self.camera_id}] Error writing offline status to DB: {e}")
+
     def _log_stats_if_due(self) -> None:
         """Log performance and tracking statistics periodically."""
         now = time.time()
@@ -465,6 +591,22 @@ class CameraWorker:
             cam = self._camera
             if not cam:
                 return
+
+            if self.db_path:
+                try:
+                    conn = get_thread_connection(self.db_path)
+                    update_camera_status(
+                        conn=conn,
+                        camera_id=self.camera_id,
+                        status=self.status,
+                        fps=self.input_fps,
+                        latency_ms=self.avg_latency_ms,
+                        last_seen_ts=now,
+                        total_frames=self.frames_processed,
+                        total_detections=self.vehicles_detected,
+                    )
+                except Exception as e:
+                    logger.debug(f"[{self.camera_id}] Error writing telemetry to DB: {e}")
 
             if self.tracker is not None:
                 metrics = self.tracker.get_metrics()

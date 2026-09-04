@@ -16,14 +16,17 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDashboardStats();
     loadRecentActivity();
     loadCameras();
+    updateSystemHealthStatus();
     loadJobQueue();
 
-    // Polling intervals: jobs every 2s, telemetry every 8s
+    // Polling intervals: jobs every 2s, telemetry & health every 5s
     setInterval(loadJobQueue, 2000);
     setInterval(() => {
         loadDashboardStats();
         loadRecentActivity();
-    }, 8000);
+        loadCameras();
+        updateSystemHealthStatus();
+    }, 5000);
 });
 
 // ---------------------------------------------------------------------------
@@ -594,12 +597,24 @@ async function loadRecentActivity() {
     }
 }
 
+function getCameraStatusBadge(status, fps, latencyMs) {
+    const s = (status || 'offline').toLowerCase();
+    if (s === 'online' || s === 'running') {
+        const perf = fps > 0 ? ` (${fps.toFixed(1)} FPS, ${Math.round(latencyMs)}ms)` : '';
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>Online${perf}</span>`;
+    } else if (s === 'reconnecting') {
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>Reconnecting</span>`;
+    } else {
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-300 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>Offline</span>`;
+    }
+}
+
 async function loadCameras() {
     const select = document.getElementById('cameraSelect');
     const statusGrid = document.getElementById('cameraStatusGrid');
 
     try {
-        const res = await fetch('/api/cameras');
+        const res = await fetch('/api/v1/system/cameras');
         if (!res.ok) return;
         const cameras = await res.json();
 
@@ -612,19 +627,52 @@ async function loadCameras() {
             if (cameras.length === 0) {
                 statusGrid.innerHTML = `<p class="text-xs text-text-muted">No cameras loaded.</p>`;
             } else {
-                statusGrid.innerHTML = cameras.map(c => `
-                    <div class="p-2 rounded bg-surface-subtle border border-border-light flex justify-between items-center text-xs">
+                statusGrid.innerHTML = cameras.map(c => {
+                    const badge = getCameraStatusBadge(c.status, c.fps || 0, c.latency_ms || 0);
+                    return `
+                    <div class="p-2.5 rounded bg-surface-subtle border border-border-light flex justify-between items-center text-xs">
                         <div>
                             <span class="font-bold text-text-main">${c.camera_id}</span>
-                            <span class="text-text-muted block text-[11px]">${c.name}</span>
+                            <span class="text-text-muted block text-[11px]">${c.name || c.camera_id}</span>
                         </div>
-                        <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-success-bg text-success border border-green-200">Online</span>
-                    </div>
-                `).join('');
+                        <div>${badge}</div>
+                    </div>`;
+                }).join('');
             }
         }
     } catch (err) {
         console.error('Error loading cameras:', err);
+    }
+}
+
+async function updateSystemHealthStatus() {
+    try {
+        const res = await fetch('/api/v1/system/health');
+        if (!res.ok) return;
+        const health = await res.json();
+
+        const dot = document.getElementById('sidebarStatusDot');
+        const text = document.getElementById('sidebarStatusText');
+        const telemText = document.getElementById('sidebarTelemetryText');
+
+        if (dot && text) {
+            if (health.status === 'healthy') {
+                dot.className = 'w-2 h-2 rounded-full bg-success animate-pulse';
+                text.textContent = 'System Healthy';
+            } else if (health.status === 'degraded') {
+                dot.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+                text.textContent = 'System Degraded';
+            } else {
+                dot.className = 'w-2 h-2 rounded-full bg-slate-400';
+                text.textContent = 'System Offline';
+            }
+        }
+
+        if (telemText) {
+            telemText.innerHTML = `Cameras: ${health.active_cameras || 0}/${health.total_cameras || 0} Online<br/>Throughput: ${health.total_fps || 0} FPS (${health.avg_latency_ms || 0}ms)`;
+        }
+    } catch (err) {
+        console.debug('Error updating system health:', err);
     }
 }
 
