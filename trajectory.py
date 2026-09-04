@@ -57,13 +57,13 @@ def get_vehicle_trajectory(conn: sqlite3.Connection, plate_text: str) -> List[Di
     return trajectory
 
 def _get_popup_html(title: str, content: Dict[str, Any]) -> str:
-    """Generate styled HTML for Folium popups using a dark theme."""
+    """Generate styled HTML for Folium popups using Morning Frost glassmorphism theme."""
     html = f'''
-    <div style="background-color: #212121; color: #ffffff; padding: 12px; border-radius: 8px; font-family: sans-serif; min-width: 180px;">
-        <h4 style="margin: 0 0 10px 0; color: #00e5ff; border-bottom: 1px solid #444; padding-bottom: 6px; font-size: 16px;">{title}</h4>
+    <div style="background: rgba(248, 250, 252, 0.95); color: #0F172A; padding: 14px; border-radius: 12px; font-family: Inter, sans-serif; min-width: 200px; border: 1px solid rgba(0, 102, 138, 0.2); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.1);">
+        <h4 style="margin: 0 0 10px 0; color: #00668a; border-bottom: 2px solid #38bdf8; padding-bottom: 6px; font-size: 15px; font-weight: 700;">{title}</h4>
     '''
     for k, v in content.items():
-        html += f'<p style="margin: 6px 0; font-size: 13px;"><b style="color: #aaaaaa;">{k}:</b> {v}</p>'
+        html += f'<p style="margin: 6px 0; font-size: 13px;"><b style="color: #475569;">{k}:</b> {v}</p>'
     html += '</div>'
     return html
 
@@ -78,7 +78,10 @@ def generate_trajectory_map(conn: sqlite3.Connection, plate_text: str, output_ht
     avg_lat = sum(t['latitude'] for t in valid_points) / len(valid_points)
     avg_lon = sum(t['longitude'] for t in valid_points) / len(valid_points)
     
-    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=13, tiles='CartoDB dark_matter')
+    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=13, tiles='CartoDB positron', control_scale=True)
+    folium.TileLayer('OpenStreetMap', name='OpenStreetMap', control=True).add_to(m)
+    folium.TileLayer('CartoDB dark_matter', name='Dark Mode', control=True).add_to(m)
+    folium.LayerControl(position='topright').add_to(m)
     
     # Add title
     title_html = f'''
@@ -176,7 +179,10 @@ def generate_overview_map(conn: sqlite3.Connection, output_html: Optional[str] =
     else:
         avg_lat, avg_lon = 20.5937, 78.9629 # Default center (India)
         
-    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=12, tiles='CartoDB dark_matter')
+    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=12, tiles='CartoDB positron', control_scale=True)
+    folium.TileLayer('OpenStreetMap', name='OpenStreetMap', control=True).add_to(m)
+    folium.TileLayer('CartoDB dark_matter', name='Dark Mode', control=True).add_to(m)
+    folium.LayerControl(position='topright').add_to(m)
     
     title_html = '''
          <h3 align="center" style="font-size:22px; color: #ff9800; margin-top: 15px; font-family: sans-serif; font-weight: bold; text-shadow: 0 0 5px rgba(255,152,0,0.5);">

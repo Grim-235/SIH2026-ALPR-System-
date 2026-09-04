@@ -13,7 +13,6 @@ import cv2
 
 from alpr.detector import load_detector, resolve_device, ensure_model, DEFAULT_MODEL_PATH
 from alpr.ocr import load_ocr
-from alpr.tracker import process_video_with_tracking
 from alpr.database import (
     init_db,
     load_cameras_from_json,
@@ -37,6 +36,7 @@ from alpr.database import (
     create_job,
     get_job_status,
 )
+from alpr.service import get_dashboard_service
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
@@ -44,7 +44,8 @@ CORS(app)
 # Database
 BASE_DIR = Path(__file__).parent
 DB_PATH = BASE_DIR / "data" / "alpr.db"
-CAMERAS_JSON = BASE_DIR / "cameras.json"
+CAMERAS_JSON = BASE_DIR / "configs" / "cameras.json" if (BASE_DIR / "configs" / "cameras.json").exists() else BASE_DIR / "cameras.json"
+CAMERA_GRAPH_JSON = BASE_DIR / "configs" / "camera_graph.json"
 BLACKLIST_FILE = BASE_DIR / "blacklist.txt"
 
 def get_db():
@@ -53,9 +54,18 @@ def get_db():
     conn = init_db(str(DB_PATH))
     load_cameras_from_json(conn, str(CAMERAS_JSON))
     load_blacklist_from_file(conn, str(BLACKLIST_FILE))
+    # Auto-cleanup orphaned jobs from previous server restarts
+    cur = conn.cursor()
+    cur.execute("UPDATE processing_jobs SET status = 'failed', error_message = 'Interrupted by server restart' WHERE status IN ('processing', 'pending')")
+    conn.commit()
     return conn
 
 conn = get_db()
+dashboard_service = get_dashboard_service(
+    db_path=DB_PATH,
+    cameras_path=CAMERAS_JSON,
+    camera_graph_path=CAMERA_GRAPH_JSON,
+)
 
 # ============================================================================
 # API ENDPOINTS
@@ -218,52 +228,161 @@ def api_job_status(job_id):
         return jsonify({'error': 'Job not found'}), 404
     return jsonify(job_status)
 
+@app.route('/api/job/<job_id>/download', methods=['GET'])
+def api_download_job_video(job_id):
+    """Download output video for a completed job"""
+    job = get_job_status(conn, job_id)
+    if not job or not job.get('output_video'):
+        return jsonify({'error': 'Job or output video not found'}), 404
+    
+    out_path = Path(job['output_video'])
+    if not out_path.exists():
+        out_path = BASE_DIR / job['output_video']
+        if not out_path.exists():
+            return jsonify({'error': 'Output video file not found on disk'}), 404
+            
+    return send_file(str(out_path.resolve()), as_attachment=True, mimetype='video/mp4')
+
+@app.route('/api/job/<job_id>', methods=['DELETE'])
+def api_delete_job(job_id):
+    """Delete or cancel a specific job"""
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM processing_jobs WHERE job_id = ?", (job_id,))
+    conn.commit()
+    return jsonify({'status': 'deleted', 'job_id': job_id})
+
+@app.route('/api/jobs/clear-all', methods=['DELETE'])
+def api_clear_all_jobs():
+    """Clear all jobs from queue"""
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM processing_jobs")
+    conn.commit()
+    return jsonify({'status': 'cleared'})
+
+@app.route('/api/reset-data', methods=['POST'])
+def api_reset_all_data():
+    """Reset all database tables back to zero"""
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM detections")
+    cursor.execute("DELETE FROM alerts")
+    cursor.execute("DELETE FROM blacklist")
+    cursor.execute("DELETE FROM processing_jobs")
+    cursor.execute("DELETE FROM cameras")
+    conn.commit()
+    cursor.execute("VACUUM")
+    load_cameras_from_json(conn, str(CAMERAS_JSON))
+    return jsonify({'status': 'reset', 'message': 'All system data reset to zero'})
+
+def _sanitize_dict(d: dict) -> dict:
+    sanitized = {}
+    for k, v in d.items():
+        if isinstance(v, bytes):
+            try:
+                sanitized[k] = v.decode('utf-8', errors='ignore').strip('\x00')
+            except Exception:
+                sanitized[k] = str(v)
+        else:
+            sanitized[k] = v
+    return sanitized
+
+@app.route('/api/jobs', methods=['GET'])
+def api_all_jobs():
+    """Get all processing jobs"""
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM processing_jobs ORDER BY created_at DESC LIMIT 20")
+    rows = cursor.fetchall()
+    return jsonify([_sanitize_dict(dict(r)) for r in rows])
+
 @app.route('/api/recent-activity', methods=['GET'])
 def api_recent_activity():
     """Get most recent detections"""
     recent = get_recent_detections(conn, limit=15)
     return jsonify(recent or [])
 
-@app.route('/api/job/<job_id>/download', methods=['GET'])
-def api_download_job_video(job_id):
-    """Download output tracked video for a completed job"""
-    job = get_job_status(conn, job_id)
-    if not job or not job.get('output_video'):
-        return jsonify({'error': 'Video output not ready or job not found'}), 404
-    video_path = Path(job['output_video'])
-    if not video_path.exists():
-        return jsonify({'error': 'Video file not found on server'}), 404
-    return send_file(video_path, as_attachment=True, download_name=video_path.name)
+# ============================================================================
+# PHASE 7D: GIS MAP, NETWORK ANALYTICS & VEHICLE SEARCH API (v1)
+# ============================================================================
 
+@app.route('/api/v1/gis/network-map', methods=['GET'])
+@app.route('/api/gis/network-map', methods=['GET'])
+def api_gis_network_map():
+    """GeoJSON FeatureCollection representing camera nodes and corridors with congestion metrics."""
+    geojson_data = dashboard_service.get_network_geojson(conn)
+    return jsonify(geojson_data)
+
+@app.route('/api/v1/gis/folium-map', methods=['GET'])
+@app.route('/api/gis/folium-map', methods=['GET'])
 @app.route('/api/map/overview', methods=['GET'])
-def api_map_overview():
-    """Generate and serve interactive Folium overview map"""
-    try:
-        from trajectory import generate_overview_map
-        overview_map = generate_overview_map(conn)
-        if overview_map:
-            html = overview_map.get_root().render()
-            return Response(html, mimetype='text/html')
-        return "<h3>Map unavailable — No camera location data</h3>", 404
-    except ImportError:
-        return "<h3>Folium library not installed (pip install folium)</h3>", 404
-    except Exception as e:
-        return f"<h3>Map generator error: {e}</h3>", 404
+def api_gis_folium_map():
+    """Serve interactive Folium map with optional vehicle trajectory overlay."""
+    vehicle_query = request.args.get('q') or request.args.get('vehicle_id') or request.args.get('plate')
+    active_traj_geojson = None
+    if vehicle_query:
+        status_code, result = dashboard_service.search_vehicle(vehicle_query, conn)
+        if status_code == 200:
+            active_traj_geojson = result.get('geojson')
+    html = dashboard_service.get_folium_map_html(conn, active_trajectory_geojson=active_traj_geojson)
+    return Response(html, mimetype='text/html')
 
-@app.route('/api/map/trajectory/<plate>', methods=['GET'])
-def api_map_trajectory(plate):
-    """Generate and serve interactive Folium plate trajectory map"""
-    try:
-        from trajectory import generate_trajectory_map
-        traj_map = generate_trajectory_map(conn, plate.upper())
-        if traj_map:
-            html = traj_map.get_root().render()
-            return Response(html, mimetype='text/html')
-        return f"<h3>No trajectory data for plate {plate}</h3>", 404
-    except ImportError:
-        return "<h3>Folium library not installed (pip install folium)</h3>", 404
-    except Exception as e:
-        return f"<h3>Map generator error: {e}</h3>", 404
+@app.route('/api/v1/analytics/summary', methods=['GET'])
+@app.route('/api/analytics/summary', methods=['GET'])
+def api_analytics_summary():
+    """Network throughput, average TTI, analysis window, and modal flow breakdown."""
+    summary_data = dashboard_service.get_analytics_summary(conn)
+    return jsonify(summary_data)
+
+@app.route('/api/v1/analytics/corridors', methods=['GET'])
+@app.route('/api/analytics/corridors', methods=['GET'])
+def api_analytics_corridors():
+    """Corridor transit metrics, speeds (median, P05, P95), TTI, degradation, and LOS proxy."""
+    corridors = dashboard_service.get_corridors_metrics(conn)
+    return jsonify(corridors)
+
+@app.route('/api/v1/analytics/hotspots', methods=['GET'])
+@app.route('/api/analytics/hotspots', methods=['GET'])
+def api_analytics_hotspots():
+    """Congestion hotspots ordered by severity."""
+    hotspots = dashboard_service.get_hotspots(conn)
+    return jsonify(hotspots)
+
+@app.route('/api/v1/analytics/od-matrix', methods=['GET'])
+@app.route('/api/analytics/od-matrix', methods=['GET'])
+def api_analytics_od_matrix():
+    """Trip-level origin-destination (first camera -> last camera) flow records."""
+    od_records = dashboard_service.get_od_matrix(conn)
+    return jsonify(od_records)
+
+@app.route('/api/v1/analytics/time-windows', methods=['GET'])
+@app.route('/api/analytics/time-windows', methods=['GET'])
+def api_analytics_time_windows():
+    """Departure-time traffic performance profiles."""
+    time_windows = dashboard_service.get_time_windows(conn)
+    return jsonify(time_windows)
+
+@app.route('/api/v1/vehicles/search', methods=['GET'])
+@app.route('/api/vehicles/search', methods=['GET'])
+def api_vehicle_search():
+    """
+    Search for vehicle by canonical license plate OR global vehicle ID (GV-XXXXXX).
+    Returns 200 (found), 404 (absent), or 400 (empty/invalid).
+    """
+    q = request.args.get('q', '').strip()
+    status_code, result = dashboard_service.search_vehicle(q, conn)
+    return jsonify(result), status_code
+
+@app.route('/api/v1/vehicles/trajectory/<identifier>', methods=['GET'])
+@app.route('/api/vehicles/trajectory/<identifier>', methods=['GET'])
+@app.route('/api/map/trajectory/<identifier>', methods=['GET'])
+def api_vehicle_trajectory(identifier):
+    """Retrieve trajectory details, sighting hops, and GeoJSON for a specific vehicle."""
+    if request.path.startswith('/api/map/trajectory/'):
+        status_code, result = dashboard_service.search_vehicle(identifier, conn)
+        active_traj_geojson = result.get('geojson') if status_code == 200 else None
+        html = dashboard_service.get_folium_map_html(conn, active_trajectory_geojson=active_traj_geojson)
+        return Response(html, mimetype='text/html')
+
+    status_code, result = dashboard_service.search_vehicle(identifier, conn)
+    return jsonify(result), status_code
 
 @app.route('/api/cameras', methods=['GET'])
 def api_cameras():
