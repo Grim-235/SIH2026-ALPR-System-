@@ -53,3 +53,10 @@ from alpr.trajectory import (
     reconstruct_trajectory_by_plate,
     list_all_trajectories,
 )
+from alpr.analytics import (
+    CorridorAnalytics,
+    TripODRecord,
+    NetworkAnalyticsReport,
+    CorridorAnalyticsEngine,
+    analyze_network_traffic,
+)
