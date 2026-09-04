@@ -1,17 +1,21 @@
 """
-Camera Worker — per-camera stream processing worker.
+Camera Worker — per-camera stream processing and pipeline orchestrator.
 
 Connects to a video source via CameraSource, reads frames in a loop,
-runs vehicle detection (Phase 2) if enabled, and logs performance metrics.
+runs single-camera vehicle tracking (Phase 3) or detection (Phase 2),
+and logs performance and tracking metrics.
 
 Usage:
-    # Single camera with vehicle detection from RTSP
-    python -m workers.camera_worker --camera-id CAM-001 --source rtsp://localhost:8554/cam01 --detect
+    # Single camera with ByteTrack vehicle tracking
+    python -m workers.camera_worker --camera-id CAM-001 --source rtsp://localhost:8554/cam01 --track
 
-    # All cameras with vehicle detection
+    # All cameras with vehicle tracking
+    python -m workers.camera_worker --config configs/cameras.json --track
+
+    # Detection-only mode (Phase 2)
     python -m workers.camera_worker --config configs/cameras.json --detect
 
-    # Plain frame reading without detection (Phase 1 mode)
+    # Ingestion-only mode (Phase 1)
     python -m workers.camera_worker --config configs/cameras.json
 """
 
@@ -30,6 +34,7 @@ import numpy as np
 
 from alpr.camera import CameraSource
 from alpr.detector import VehicleDetector, VehicleDetection
+from alpr.tracker import VehicleTracker, ActiveVehicleTrack, VehicleTrackState
 
 # Configure logging
 logging.basicConfig(
@@ -44,8 +49,8 @@ class CameraWorker:
     Per-camera frame reader and pipeline orchestrator.
 
     Connects to a source, reads frames continuously, handles
-    reconnection on failure, runs detection if configured, and
-    reports performance metrics (input FPS, inference FPS, latency).
+    reconnection on failure, runs tracking/detection if configured,
+    and reports performance and tracking metrics.
     """
 
     def __init__(
@@ -55,7 +60,9 @@ class CameraWorker:
         fps_target: float = 0.0,
         reconnect_max_retries: int = 10,
         detector: Optional[VehicleDetector] = None,
+        tracker: Optional[VehicleTracker] = None,
         on_detections: Optional[Callable[[str, np.ndarray, List[VehicleDetection], float, float], None]] = None,
+        on_tracks: Optional[Callable[[str, np.ndarray, List[ActiveVehicleTrack], float, float], None]] = None,
     ):
         """
         Initialize a camera worker.
@@ -65,15 +72,19 @@ class CameraWorker:
             source: Video source — RTSP URL, file path, or webcam index.
             fps_target: Target FPS for throttling (0 = no throttle).
             reconnect_max_retries: Max reconnection attempts.
-            detector: Optional VehicleDetector instance for running vehicle detection.
+            detector: Optional VehicleDetector instance (for detection-only mode).
+            tracker: Optional VehicleTracker instance (for tracking mode).
             on_detections: Optional callback(camera_id, frame, detections, latency_ms, capture_ts).
+            on_tracks: Optional callback(camera_id, frame, active_tracks, latency_ms, capture_ts).
         """
         self.camera_id = camera_id
         self.source = source
         self.fps_target = fps_target
         self.reconnect_max_retries = reconnect_max_retries
         self.detector = detector
+        self.tracker = tracker
         self.on_detections = on_detections
+        self.on_tracks = on_tracks
 
         self._running = False
         self._camera: Optional[CameraSource] = None
@@ -123,7 +134,7 @@ class CameraWorker:
 
     @property
     def avg_latency_ms(self) -> float:
-        """Average YOLO inference latency in milliseconds."""
+        """Average inference/tracking latency in milliseconds."""
         if not self._latencies:
             return 0.0
         return sum(self._latencies) / len(self._latencies)
@@ -139,12 +150,18 @@ class CameraWorker:
         """
         Main processing loop.
 
-        Connects to the source, reads frames continuously, runs vehicle detection
-        if detector is provided, and handles reconnection on failure.
+        Connects to the source, reads frames continuously, runs tracking
+        or detection if configured, and handles reconnection on failure.
         """
         self._running = True
-        has_det = "with YOLO vehicle detection" if self.detector else "frame ingestion only"
-        logger.info(f"[{self.camera_id}] Worker starting ({has_det}) — source: {self.source}")
+        if self.tracker:
+            mode_desc = f"with vehicle tracking ({self.tracker.tracker_type})"
+        elif self.detector:
+            mode_desc = "with vehicle detection"
+        else:
+            mode_desc = "frame ingestion only"
+
+        logger.info(f"[{self.camera_id}] Worker starting ({mode_desc}) — source: {self.source}")
 
         self._camera = CameraSource(
             source=self.source,
@@ -181,8 +198,36 @@ class CameraWorker:
                 if success:
                     consecutive_failures = 0
 
-                    # Stage 1: Vehicle Detection (Phase 2)
-                    if self.detector is not None and frame is not None:
+                    # ── Stage: Tracking (Phase 3) ──
+                    if self.tracker is not None and frame is not None:
+                        t0 = time.perf_counter()
+                        active_tracks = self.tracker.update(
+                            frame,
+                            frame_number=cam.frames_read,
+                            timestamp=capture_ts,
+                        )
+                        latency_ms = (time.perf_counter() - t0) * 1000.0
+
+                        self.frames_processed += 1
+                        self.vehicles_detected += len(active_tracks)
+                        self._latencies.append(latency_ms)
+                        self._proc_times.append(time.time())
+                        self._vehicle_counts.append(len(active_tracks))
+
+                        if self.on_tracks:
+                            try:
+                                self.on_tracks(
+                                    self.camera_id,
+                                    frame,
+                                    active_tracks,
+                                    latency_ms,
+                                    capture_ts,
+                                )
+                            except Exception as cb_err:
+                                logger.error(f"[{self.camera_id}] Track callback error: {cb_err}")
+
+                    # ── Stage: Detection-only (Phase 2 fallback) ──
+                    elif self.detector is not None and frame is not None:
                         detections, latency_ms = self.detector.detect(frame)
                         self.frames_processed += 1
                         self.vehicles_detected += len(detections)
@@ -243,7 +288,19 @@ class CameraWorker:
         drop_cnt = cam.frames_dropped if cam else 0
         in_fps = cam.get_fps() if cam else 0.0
 
-        if self.detector:
+        if self.tracker:
+            finalized = self.tracker.finalize_all()
+            metrics = self.tracker.get_metrics()
+            logger.info(
+                f"[{self.camera_id}] Worker stopped. "
+                f"read={read_cnt}, proc={self.frames_processed}, "
+                f"tracks_created={metrics['tracks_created']}, "
+                f"tracks_finalized={len(finalized)}, "
+                f"avg_track_len={metrics['avg_track_length']:.1f}f, "
+                f"in_fps={in_fps:.1f}, infer_fps={self.inference_fps:.1f}, "
+                f"avg_latency={self.avg_latency_ms:.1f}ms"
+            )
+        elif self.detector:
             logger.info(
                 f"[{self.camera_id}] Worker stopped. "
                 f"read={read_cnt}, proc={self.frames_processed}, "
@@ -262,33 +319,47 @@ class CameraWorker:
             self._camera = None
 
     def _log_stats_if_due(self) -> None:
-        """Log performance statistics periodically."""
+        """Log performance and tracking statistics periodically."""
         now = time.time()
         if now - self._last_stats_time >= self._stats_interval:
             self._last_stats_time = now
             cam = self._camera
-            if cam:
-                if self.detector is not None:
-                    logger.info(
-                        f"[{self.camera_id}] "
-                        f"status={self.status:<7} | "
-                        f"input_fps={self.input_fps:4.1f} | "
-                        f"infer_fps={self.inference_fps:4.1f} | "
-                        f"latency={self.avg_latency_ms:5.1f}ms | "
-                        f"vehicles/frame={self.avg_vehicles_per_frame:3.1f} | "
-                        f"total_vehicles={self.vehicles_detected}"
-                    )
-                else:
-                    logger.info(
-                        f"[{self.camera_id}] "
-                        f"status={self.status:<7} | "
-                        f"frames={cam.frames_read} | "
-                        f"dropped={cam.frames_dropped} | "
-                        f"fps={cam.get_fps():.1f} | "
-                        f"native_fps={cam.get_native_fps():.1f} | "
-                        f"resolution={cam.get_resolution()} | "
-                        f"uptime={cam.connection_uptime:.0f}s"
-                    )
+            if not cam:
+                return
+
+            if self.tracker is not None:
+                metrics = self.tracker.get_metrics()
+                logger.info(
+                    f"[{self.camera_id}] "
+                    f"status={self.status:<7} | "
+                    f"input_fps={self.input_fps:4.1f} | "
+                    f"infer_fps={self.inference_fps:4.1f} | "
+                    f"latency={self.avg_latency_ms:5.1f}ms | "
+                    f"active_tracks={metrics['active_tracks']:<2} | "
+                    f"total_tracks={metrics['tracks_created']:<3} | "
+                    f"avg_len={metrics['avg_track_length']:4.1f}f"
+                )
+            elif self.detector is not None:
+                logger.info(
+                    f"[{self.camera_id}] "
+                    f"status={self.status:<7} | "
+                    f"input_fps={self.input_fps:4.1f} | "
+                    f"infer_fps={self.inference_fps:4.1f} | "
+                    f"latency={self.avg_latency_ms:5.1f}ms | "
+                    f"vehicles/frame={self.avg_vehicles_per_frame:3.1f} | "
+                    f"total_vehicles={self.vehicles_detected}"
+                )
+            else:
+                logger.info(
+                    f"[{self.camera_id}] "
+                    f"status={self.status:<7} | "
+                    f"frames={cam.frames_read} | "
+                    f"dropped={cam.frames_dropped} | "
+                    f"fps={cam.get_fps():.1f} | "
+                    f"native_fps={cam.get_native_fps():.1f} | "
+                    f"resolution={cam.get_resolution()} | "
+                    f"uptime={cam.connection_uptime:.0f}s"
+                )
 
 
 class MultiCameraManager:
@@ -329,7 +400,13 @@ class MultiCameraManager:
         config_path: str,
         use_stream: bool = True,
         detector: Optional[VehicleDetector] = None,
+        tracker_type: Optional[str] = None,
+        model_path: str = "data/models/yolov8n.pt",
+        conf: float = 0.35,
+        iou: float = 0.5,
+        device: str = "auto",
         on_detections: Optional[Callable] = None,
+        on_tracks: Optional[Callable] = None,
     ) -> None:
         """
         Start workers for all cameras in the config.
@@ -338,8 +415,14 @@ class MultiCameraManager:
             config_path: Path to cameras.json.
             use_stream: If True, connect via stream_url (RTSP).
                         If False, connect directly to the video file.
-            detector: Optional VehicleDetector instance shared across workers.
-            on_detections: Optional callback for vehicle detections.
+            detector: Optional VehicleDetector instance (detection-only mode).
+            tracker_type: If provided, initializes a VehicleTracker per camera.
+            model_path: Path to YOLO weights for trackers.
+            conf: Confidence threshold.
+            iou: NMS IoU threshold.
+            device: Compute device.
+            on_detections: Optional detection callback.
+            on_tracks: Optional tracking callback.
         """
         cameras = self.load_cameras(config_path)
         if not cameras:
@@ -362,12 +445,26 @@ class MultiCameraManager:
 
             fps_target = cam.get("fps", 0)
 
+            # Initialize tracker for this camera if requested
+            worker_tracker = None
+            if tracker_type:
+                worker_tracker = VehicleTracker(
+                    model_path=model_path,
+                    tracker_type=tracker_type,
+                    conf=conf,
+                    iou=iou,
+                    device=device,
+                    camera_id=cam_id,
+                )
+
             worker = CameraWorker(
                 camera_id=cam_id,
                 source=source,
                 fps_target=float(fps_target),
-                detector=detector,
+                detector=detector if not worker_tracker else None,
+                tracker=worker_tracker,
                 on_detections=on_detections,
+                on_tracks=on_tracks,
             )
             self.workers[cam_id] = worker
 
@@ -380,7 +477,13 @@ class MultiCameraManager:
 
         # Print startup summary
         print(f"\n{'='*75}")
-        mode_str = "YOLO Vehicle Detection" if detector else "Ingestion Only"
+        if tracker_type:
+            mode_str = f"Vehicle Tracking ({tracker_type})"
+        elif detector:
+            mode_str = "Vehicle Detection Only"
+        else:
+            mode_str = "Frame Ingestion Only"
+
         print(f"  Multi-Camera Pipeline Mode: {mode_str}")
         print(f"{'='*75}")
         print(f"{'Camera ID':<12} | {'Source':<45} | {'FPS Target'}")
@@ -428,7 +531,7 @@ class MultiCameraManager:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Camera Worker — multi-camera ingestion & vehicle detection"
+        description="Camera Worker — multi-camera ingestion, vehicle detection & tracking"
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
@@ -467,12 +570,27 @@ def main():
         help="Seconds between stats log messages (default: 10)",
     )
 
-    # Phase 2: Vehicle Detection flags
+    # Phase 2: Vehicle Detection flag
     parser.add_argument(
         "--detect",
         action="store_true",
-        help="Enable YOLO vehicle detection",
+        help="Enable YOLO vehicle detection (detection-only mode)",
     )
+
+    # Phase 3: Single-Camera Tracking flags
+    parser.add_argument(
+        "--track",
+        action="store_true",
+        help="Enable single-camera vehicle tracking (ByteTrack)",
+    )
+    parser.add_argument(
+        "--tracker-type",
+        type=str,
+        default="bytetrack.yaml",
+        choices=["bytetrack.yaml", "botsort.yaml"],
+        help="Tracker backend: bytetrack.yaml or botsort.yaml (default: bytetrack.yaml)",
+    )
+
     parser.add_argument(
         "--model",
         type=str,
@@ -506,19 +624,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Instantiate detector if requested
-    detector = None
-    if args.detect:
-        logger.info(f"Loading vehicle detector from {args.model}...")
-        detector = VehicleDetector(
-            model_path=args.model,
-            conf=args.conf,
-            iou=args.iou,
-            imgsz=args.imgsz,
-            device=args.device,
-        )
-        logger.info(f"Vehicle detector ready on device: {detector.device}")
-
     # Handle shutdown signals
     def signal_handler(sig, frame):
         logger.info("Shutdown signal received.")
@@ -530,12 +635,38 @@ def main():
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, signal_handler)
 
+    tracker = None
+    detector = None
+
+    if args.track:
+        logger.info(f"Initializing VehicleTracker with {args.tracker_type}...")
+        if args.source:
+            tracker = VehicleTracker(
+                model_path=args.model,
+                tracker_type=args.tracker_type,
+                conf=args.conf,
+                iou=args.iou,
+                imgsz=args.imgsz,
+                device=args.device,
+                camera_id=args.camera_id,
+            )
+    elif args.detect:
+        logger.info(f"Loading vehicle detector from {args.model}...")
+        detector = VehicleDetector(
+            model_path=args.model,
+            conf=args.conf,
+            iou=args.iou,
+            imgsz=args.imgsz,
+            device=args.device,
+        )
+
     if args.source:
         worker = CameraWorker(
             camera_id=args.camera_id,
             source=args.source,
             fps_target=args.fps,
             detector=detector,
+            tracker=tracker,
         )
         worker._stats_interval = args.stats_interval
         worker.start()
@@ -546,6 +677,11 @@ def main():
             args.config,
             use_stream=not args.direct,
             detector=detector,
+            tracker_type=args.tracker_type if args.track else None,
+            model_path=args.model,
+            conf=args.conf,
+            iou=args.iou,
+            device=args.device,
         )
 
 

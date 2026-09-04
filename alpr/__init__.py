@@ -8,3 +8,8 @@ from alpr.detector import (
     VEHICLE_CLASS_MAP,
 )
 from alpr.ocr import load_ocr, recognize_plate, is_probable_indian_plate
+from alpr.tracker import (
+    VehicleTracker,
+    VehicleTrackState,
+    ActiveVehicleTrack,
+)
