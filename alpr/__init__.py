@@ -27,3 +27,10 @@ from alpr.reid import (
     compute_similarity,
     aggregate_embeddings,
 )
+from alpr.identity import (
+    GlobalVehicleIdentity,
+    VehicleObservation,
+    IdentityMatchResult,
+    GlobalIdentityResolver,
+    compute_plate_similarity,
+)
