@@ -81,7 +81,7 @@
             <div class="text-lg font-bold text-primary flex items-center gap-2 cursor-pointer" id="brandLogoBtn">
                 <span class="material-symbols-outlined text-xl">traffic</span>
                 <span>CITY-ANPR</span>
-                <span class="bg-primary/10 text-primary text-[10px] font-semibold px-2 py-0.5 rounded-full border border-primary/20">Phase 8</span>
+                <span class="bg-primary/10 text-primary text-[10px] font-semibold px-2 py-0.5 rounded-full border border-primary/20">SIH 2026</span>
             </div>
             
             <!-- Global Search -->
@@ -173,26 +173,17 @@
                     </div>
                 </div>
 
-                <!-- LOS Proxy Disclaimer Alert -->
-                <div class="bg-surface-subtle border-l-4 border-primary rounded-r p-3 text-xs text-text-muted flex items-start gap-2">
-                    <span class="material-symbols-outlined text-primary text-base">info</span>
-                    <div>
-                        <span class="font-semibold text-text-main">Level of Service (LOS) Proxy Notice:</span>
-                        <span> Corridor LOS classification (A through F) is a project-specific proxy derived from the Travel Time Index (TTI = t_median / t_free_flow). It is <b>NOT</b> facility-specific HCM LOS methodology.</span>
-                    </div>
-                </div>
-
                 <!-- Map Canvas & Hotspots Sidebar Grid -->
                 <div class="grid grid-cols-1 lg:grid-cols-4 gap-5">
                     <!-- Folium Map Container (3 cols) -->
                     <div class="lg:col-span-3 panel-card p-2 rounded flex flex-col">
-                        <div id="overviewMapContainer" class="w-full h-[580px] rounded overflow-hidden border border-border-light bg-surface-subtle">
+                        <div id="overviewMapContainer" class="w-full h-[620px] rounded overflow-hidden border border-border-light bg-surface-subtle">
                             <iframe id="cityMapIframe" src="/api/v1/gis/folium-map" class="w-full h-full border-none"></iframe>
                         </div>
                     </div>
 
-                    <!-- Right Sidebar: Hotspots Leaderboard & Legend (1 col) -->
-                    <div class="lg:col-span-1 space-y-4">
+                    <!-- Right Sidebar: Hotspots Leaderboard & Inline LOS Index (1 col) -->
+                    <div class="lg:col-span-1 space-y-3">
                         <!-- Hotspots Leaderboard -->
                         <div class="panel-card p-4 rounded space-y-3">
                             <div class="flex justify-between items-center border-b border-border-light pb-2">
@@ -203,66 +194,24 @@
                                 <span id="hotspotsCountBadge" class="bg-error-bg text-error text-[10px] font-bold px-1.5 py-0.5 rounded-full">0</span>
                             </div>
 
-                            <div id="hotspotsList" class="space-y-2 max-h-64 overflow-y-auto pr-1">
+                            <div id="hotspotsList" class="space-y-2 max-h-[480px] overflow-y-auto pr-1">
                                 <p class="text-xs text-text-muted text-center py-4">Loading hotspots...</p>
                             </div>
                         </div>
 
-                        <!-- LOS Legend -->
-                        <div class="panel-card p-4 rounded space-y-2">
-                            <h2 class="text-xs font-bold uppercase tracking-wider text-text-main border-b border-border-light pb-2">
-                                LOS Proxy Legend
-                            </h2>
-                            <div class="space-y-1.5 text-xs text-text-main">
-                                <div class="flex items-center justify-between">
-                                    <div class="flex items-center gap-2">
-                                        <span class="w-3 h-3 rounded-full bg-[#10b981]"></span>
-                                        <span>LOS A (Free Flow)</span>
-                                    </div>
-                                    <span class="text-[10px] text-text-muted">TTI ≤ 1.10</span>
-                                </div>
-                                <div class="flex items-center justify-between">
-                                    <div class="flex items-center gap-2">
-                                        <span class="w-3 h-3 rounded-full bg-[#84cc16]"></span>
-                                        <span>LOS B (Light)</span>
-                                    </div>
-                                    <span class="text-[10px] text-text-muted">1.10–1.25</span>
-                                </div>
-                                <div class="flex items-center justify-between">
-                                    <div class="flex items-center gap-2">
-                                        <span class="w-3 h-3 rounded-full bg-[#eab308]"></span>
-                                        <span>LOS C (Moderate)</span>
-                                    </div>
-                                    <span class="text-[10px] text-text-muted">1.25–1.50</span>
-                                </div>
-                                <div class="flex items-center justify-between">
-                                    <div class="flex items-center gap-2">
-                                        <span class="w-3 h-3 rounded-full bg-[#f97316]"></span>
-                                        <span>LOS D (Heavy)</span>
-                                    </div>
-                                    <span class="text-[10px] text-text-muted">1.50–2.00</span>
-                                </div>
-                                <div class="flex items-center justify-between">
-                                    <div class="flex items-center gap-2">
-                                        <span class="w-3 h-3 rounded-full bg-[#ef4444]"></span>
-                                        <span>LOS E (Severe)</span>
-                                    </div>
-                                    <span class="text-[10px] text-text-muted">2.00–2.50</span>
-                                </div>
-                                <div class="flex items-center justify-between">
-                                    <div class="flex items-center gap-2">
-                                        <span class="w-3 h-3 rounded-full bg-[#991b1b]"></span>
-                                        <span>LOS F (Breakdown)</span>
-                                    </div>
-                                    <span class="text-[10px] text-text-muted">&gt; 2.50</span>
-                                </div>
-                                <div class="flex items-center justify-between border-t border-border-light pt-1.5">
-                                    <div class="flex items-center gap-2">
-                                        <span class="w-3 h-3 rounded-full bg-[#94a3b8]"></span>
-                                        <span class="text-text-muted">Sparse Data (N &lt; 3)</span>
-                                    </div>
-                                    <span class="text-[10px] text-text-muted">Dashed</span>
-                                </div>
+                        <!-- Compact LOS Legend Strip -->
+                        <div class="panel-card p-3 rounded text-[11px] space-y-1.5">
+                            <div class="flex items-center justify-between text-text-muted">
+                                <span class="font-bold text-[10px] uppercase tracking-wider text-text-main">Corridor LOS Key</span>
+                                <span class="text-[10px]">Travel Time Index</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-1.5 text-[10px] font-mono">
+                                <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#10b981]"></span>A: ≤1.10</span>
+                                <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#84cc16]"></span>B: 1.25</span>
+                                <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#eab308]"></span>C: 1.50</span>
+                                <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#f97316]"></span>D: 2.00</span>
+                                <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#ef4444]"></span>E: 2.50</span>
+                                <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#991b1b]"></span>F: &gt;2.50</span>
                             </div>
                         </div>
                     </div>
@@ -317,28 +266,28 @@
                     </div>
                 </div>
 
-                <!-- Modal Flow Breakdown Card -->
-                <div class="panel-card p-4 rounded space-y-3">
-                    <h2 class="text-xs font-bold uppercase tracking-wider text-text-main border-b border-border-light pb-2 flex items-center gap-1.5">
-                        <span class="material-symbols-outlined text-base text-primary">directions_car</span>
-                        <span>Modal Flow Breakdown</span>
-                    </h2>
-                    <div id="modalFlowContainer" class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-                        <div class="bg-surface-subtle p-3 rounded border border-border-light">
-                            <span class="text-[10px] font-bold uppercase text-text-muted">Cars</span>
-                            <p id="modalCountCar" class="text-lg font-bold text-text-main">0</p>
+                <!-- Modal Flow Distribution Strip -->
+                <div class="panel-card p-3 rounded flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div class="flex items-center gap-2">
+                        <span class="material-symbols-outlined text-primary text-lg">directions_car</span>
+                        <span class="text-xs font-bold uppercase tracking-wider text-text-main">Modal Flow Distribution</span>
+                    </div>
+                    <div id="modalFlowContainer" class="flex items-center gap-4 flex-wrap text-xs">
+                        <div class="flex items-center gap-1.5 px-3 py-1 rounded bg-surface-subtle border border-border-light">
+                            <span class="text-[10px] font-semibold text-text-muted uppercase">Cars:</span>
+                            <span id="modalCountCar" class="font-bold font-mono text-text-main">0</span>
                         </div>
-                        <div class="bg-surface-subtle p-3 rounded border border-border-light">
-                            <span class="text-[10px] font-bold uppercase text-text-muted">Motorcycles</span>
-                            <p id="modalCountMotorcycle" class="text-lg font-bold text-text-main">0</p>
+                        <div class="flex items-center gap-1.5 px-3 py-1 rounded bg-surface-subtle border border-border-light">
+                            <span class="text-[10px] font-semibold text-text-muted uppercase">Motorcycles:</span>
+                            <span id="modalCountMotorcycle" class="font-bold font-mono text-text-main">0</span>
                         </div>
-                        <div class="bg-surface-subtle p-3 rounded border border-border-light">
-                            <span class="text-[10px] font-bold uppercase text-text-muted">Buses</span>
-                            <p id="modalCountBus" class="text-lg font-bold text-text-main">0</p>
+                        <div class="flex items-center gap-1.5 px-3 py-1 rounded bg-surface-subtle border border-border-light">
+                            <span class="text-[10px] font-semibold text-text-muted uppercase">Buses:</span>
+                            <span id="modalCountBus" class="font-bold font-mono text-text-main">0</span>
                         </div>
-                        <div class="bg-surface-subtle p-3 rounded border border-border-light">
-                            <span class="text-[10px] font-bold uppercase text-text-muted">Trucks</span>
-                            <p id="modalCountTruck" class="text-lg font-bold text-text-main">0</p>
+                        <div class="flex items-center gap-1.5 px-3 py-1 rounded bg-surface-subtle border border-border-light">
+                            <span class="text-[10px] font-semibold text-text-muted uppercase">Trucks:</span>
+                            <span id="modalCountTruck" class="font-bold font-mono text-text-main">0</span>
                         </div>
                     </div>
                 </div>
@@ -460,15 +409,24 @@
                 <div id="vehicleDetailsContainer" class="grid grid-cols-1 lg:grid-cols-3 gap-5 hidden">
                     <!-- Left: Vehicle Dossier Card (1 col) -->
                     <div class="lg:col-span-1 space-y-4">
-                        <!-- Identity Card -->
+                        <!-- Unified Target Identity Dossier Card -->
                         <div class="panel-card p-4 rounded space-y-3">
-                            <span class="text-[11px] font-bold uppercase text-text-muted">Target Identity Dossier</span>
-                            <div class="p-3 rounded bg-surface-subtle border border-border-light text-center">
-                                <p id="dossierPlateDisplay" class="text-xl font-bold tracking-wider text-primary">--</p>
-                                <p id="dossierGlobalId" class="text-xs font-mono text-text-muted mt-0.5">--</p>
+                            <div class="flex justify-between items-center border-b border-border-light pb-2">
+                                <span class="text-[11px] font-bold uppercase tracking-wider text-text-muted">Target Identity Dossier</span>
+                                <span id="dossierReidStatus" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-success-bg text-success border border-green-200">Active</span>
                             </div>
 
-                            <div class="space-y-1.5 text-xs text-text-main pt-1">
+                            <div class="p-3 rounded bg-surface-subtle border border-border-light text-center space-y-1">
+                                <p id="dossierPlateDisplay" class="text-xl font-extrabold tracking-wider text-primary font-mono">--</p>
+                                <p id="dossierGlobalId" class="text-xs font-mono text-text-muted">--</p>
+                                
+                                <!-- Kinematic Plausibility / Anomaly Badges integrated directly under ID -->
+                                <div id="dossierAnomalyBadges" class="flex flex-wrap justify-center gap-1 pt-1">
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-success-bg text-success border border-green-200">Physically Plausible</span>
+                                </div>
+                            </div>
+
+                            <div class="space-y-1 text-xs text-text-main pt-1">
                                 <div class="flex justify-between py-1 border-b border-border-light">
                                     <span class="text-text-muted">Vehicle Class:</span>
                                     <span id="dossierVehicleType" class="font-bold uppercase">--</span>
@@ -493,13 +451,25 @@
                                     <span class="text-text-muted">Net Transit Duration:</span>
                                     <span id="dossierDuration" class="font-semibold">--</span>
                                 </div>
-                                <div class="flex justify-between py-1">
+                                <div class="flex justify-between py-1 border-b border-border-light">
                                     <span class="text-text-muted">Average Speed:</span>
                                     <span id="dossierAvgSpeed" class="font-bold text-secondary">--</span>
                                 </div>
                             </div>
 
-                            <!-- Phase 9B: Export Dossier Actions -->
+                            <!-- Integrated ReID Feature Telemetry Row -->
+                            <div class="p-2 rounded bg-surface-subtle border border-border-light flex items-center justify-between text-[11px]">
+                                <span class="text-text-muted flex items-center gap-1 font-medium">
+                                    <span class="material-symbols-outlined text-sm text-primary">fingerprint</span>
+                                    <span>ReID Feature Vector</span>
+                                </span>
+                                <div class="flex items-center gap-2 font-mono text-[10px]">
+                                    <span id="dossierReidDim" class="bg-surface px-1.5 py-0.5 rounded border border-border-light">512-D</span>
+                                    <span id="dossierReidNorm" class="bg-surface px-1.5 py-0.5 rounded border border-border-light">||e|| = 1.0000</span>
+                                </div>
+                            </div>
+
+                            <!-- Export Dossier Actions -->
                             <div class="pt-2 border-t border-border-light flex gap-2">
                                 <button id="exportVehiclePdfBtn" class="flex-1 py-1.5 rounded bg-primary text-white font-semibold text-[11px] shadow-sm hover:bg-primary-hover flex items-center justify-center gap-1">
                                     <span class="material-symbols-outlined text-sm">picture_as_pdf</span>
@@ -513,40 +483,6 @@
                                     <span class="material-symbols-outlined text-sm">table_view</span>
                                     <span>CSV</span>
                                 </button>
-                            </div>
-                        </div>
-
-                        <!-- ReID Diagnostics Card -->
-                        <div class="panel-card p-4 rounded space-y-2">
-                            <span class="text-[11px] font-bold uppercase text-text-muted flex items-center gap-1">
-                                <span class="material-symbols-outlined text-primary text-base">fingerprint</span>
-                                <span>ReID Baseline Diagnostics</span>
-                            </span>
-                            <div class="space-y-1.5 text-xs text-text-main pt-1">
-                                <div class="flex justify-between py-1 border-b border-border-light">
-                                    <span class="text-text-muted">Embedding Status:</span>
-                                    <span id="dossierReidStatus" class="font-semibold text-success">Active</span>
-                                </div>
-                                <div class="flex justify-between py-1 border-b border-border-light">
-                                    <span class="text-text-muted">Vector Dimension:</span>
-                                    <span id="dossierReidDim" class="font-mono">512-D</span>
-                                </div>
-                                <div class="flex justify-between py-1 border-b border-border-light">
-                                    <span class="text-text-muted">L2 Normalization:</span>
-                                    <span id="dossierReidNorm" class="font-mono">||e|| = 1.0000</span>
-                                </div>
-                                <div class="flex justify-between py-1">
-                                    <span class="text-text-muted">Raw Float Vector:</span>
-                                    <span class="text-[10px] text-text-muted italic">Sanitized (Omitted)</span>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Anomaly Diagnostic Badges -->
-                        <div class="panel-card p-4 rounded space-y-2">
-                            <span class="text-[11px] font-bold uppercase text-text-muted">Kinematic Plausibility</span>
-                            <div id="dossierAnomalyBadges" class="flex flex-wrap gap-1.5 pt-1">
-                                <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-success-bg text-success border border-green-200">Physically Plausible</span>
                             </div>
                         </div>
                     </div>
@@ -596,7 +532,7 @@
             </section>
 
             <!-- ========================================================= -->
-            <!-- UTILITY MODULE: TELEMETRY DASHBOARD (EXISTING)            -->
+            <!-- UTILITY MODULE: TELEMETRY DASHBOARD                       -->
             <!-- ========================================================= -->
             <section id="tabDashboard" class="space-y-5 hidden">
                 <div class="flex justify-between items-center border-b border-border-light pb-3">
@@ -663,7 +599,7 @@
             </section>
 
             <!-- ========================================================= -->
-            <!-- UTILITY MODULE: VIDEO PROCESSING HUB (EXISTING)           -->
+            <!-- UTILITY MODULE: VIDEO PROCESSING HUB                      -->
             <!-- ========================================================= -->
             <section id="tabVideoHub" class="space-y-5 hidden">
                 <div class="border-b border-border-light pb-3">
@@ -749,14 +685,14 @@
             </section>
 
             <!-- ========================================================= -->
-            <!-- UTILITY MODULE: THREAT ALERT CENTER (PHASE 7E ENRICHED)    -->
+            <!-- UTILITY MODULE: THREAT ALERT CENTER                       -->
             <!-- ========================================================= -->
             <section id="tabAlertCenter" class="space-y-5 hidden">
                 <div class="flex flex-wrap justify-between items-center gap-3 border-b border-border-light pb-3">
                     <div>
                         <h1 class="text-xl font-bold text-text-main flex items-center gap-2">
+                            <span class="material-symbols-outlined text-error">shield</span>
                             <span>Threat Alerts & Security Intelligence</span>
-                            <span class="bg-error/10 text-error text-[10px] font-bold px-2 py-0.5 rounded-full border border-error/20">Phase 7E</span>
                         </h1>
                         <p class="text-xs text-text-muted mt-0.5">Automated surveillance rules: Watchlists, kinematic bounds, topological anomalies, and identity ambiguity</p>
                     </div>
@@ -772,29 +708,29 @@
                     </div>
                 </div>
 
-                <!-- Alert Metric Counters -->
-                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                    <div class="panel-card p-3 rounded border-red-200 bg-error-bg/20">
-                        <span class="text-[10px] font-bold uppercase text-error block">Critical Threats</span>
+                <!-- Sleek Alert Metric Counter Bar -->
+                <div class="panel-card p-3 rounded grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 divide-y sm:divide-y-0 sm:divide-x divide-border-light text-center">
+                    <div class="p-2">
+                        <span class="text-[10px] font-bold uppercase text-error block">Critical</span>
                         <span id="alertCountCritical" class="text-xl font-extrabold text-error">0</span>
                     </div>
-                    <div class="panel-card p-3 rounded border-orange-200 bg-orange-50/50">
-                        <span class="text-[10px] font-bold uppercase text-orange-700 block">High Severity</span>
-                        <span id="alertCountHigh" class="text-xl font-extrabold text-orange-700">0</span>
+                    <div class="p-2">
+                        <span class="text-[10px] font-bold uppercase text-orange-600 block">High Severity</span>
+                        <span id="alertCountHigh" class="text-xl font-extrabold text-orange-600">0</span>
                     </div>
-                    <div class="panel-card p-3 rounded border-amber-200 bg-amber-50/50">
-                        <span class="text-[10px] font-bold uppercase text-amber-700 block">Medium / Warning</span>
-                        <span id="alertCountMedium" class="text-xl font-extrabold text-amber-700">0</span>
+                    <div class="p-2">
+                        <span class="text-[10px] font-bold uppercase text-amber-600 block">Warning</span>
+                        <span id="alertCountMedium" class="text-xl font-extrabold text-amber-600">0</span>
                     </div>
-                    <div class="panel-card p-3 rounded border-blue-200 bg-blue-50/50">
-                        <span class="text-[10px] font-bold uppercase text-blue-700 block">Low / Ambiguity</span>
-                        <span id="alertCountLow" class="text-xl font-extrabold text-blue-700">0</span>
+                    <div class="p-2">
+                        <span class="text-[10px] font-bold uppercase text-blue-600 block">Notice</span>
+                        <span id="alertCountLow" class="text-xl font-extrabold text-blue-600">0</span>
                     </div>
-                    <div class="panel-card p-3 rounded">
-                        <span class="text-[10px] font-bold uppercase text-text-muted block">Unacknowledged</span>
+                    <div class="p-2">
+                        <span class="text-[10px] font-bold uppercase text-text-muted block">Unack'd</span>
                         <span id="alertCountUnack" class="text-xl font-extrabold text-text-main">0</span>
                     </div>
-                    <div class="panel-card p-3 rounded">
+                    <div class="p-2">
                         <span class="text-[10px] font-bold uppercase text-text-muted block">Total Alerts</span>
                         <span id="alertCountTotal" class="text-xl font-extrabold text-text-main">0</span>
                     </div>
