@@ -88,7 +88,10 @@ inputs/*.mp4
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
 data/*.db
+data/*.db-*
 
 # Project specific
 .env.local

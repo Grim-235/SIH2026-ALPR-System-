@@ -881,3 +881,7 @@ def test_dashboard_service_with_live_orchestrator():
                 os.remove(p)
             except OSError:
                 pass
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main(["-xvs", __file__]))

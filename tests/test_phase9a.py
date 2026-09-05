@@ -258,3 +258,7 @@ def test_zero_math_in_flask_routes():
         src = inspect.getsource(route_fn).lower()
         for pat in forbidden_patterns:
             assert pat not in src, f"Route {route_fn.__name__} violates architectural boundary: contains '{pat}'"
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main(["-xvs", __file__]))

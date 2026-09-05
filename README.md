@@ -1,25 +1,127 @@
-# Modern Indian ALPR 🚗
+# Modern Indian ALPR & Multi-Camera City Surveillance Platform 🚗
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10+-blue)
-![Status](https://img.shields.io/badge/status-Production%20Ready-brightgreen)
+![Status](https://img.shields.io/badge/status-Competition%20Ready%20(SIH%202026)-brightgreen)
+![Phases](https://img.shields.io/badge/milestones-Phases%201--10%20(100%25%20Verified)-success)
 
-**Modern Indian ALPR** is a comprehensive, production-ready Automatic License Plate Recognition (ALPR) system designed specifically for Indian vehicle license plates. Built with cutting-edge deep learning and computer vision technologies, it provides real-time plate detection, character recognition, and traffic analytics capabilities.
+**Modern Indian ALPR** is an end-to-end, multi-camera intelligent traffic surveillance and vehicle identity resolution platform developed for the **Smart India Hackathon (SIH 2026)**.
 
-## 🎯 Key Features
+---
 
-- **🎯 High-Accuracy Plate Detection** - YOLOv8-based detector optimized for Indian license plates
-- **📝 Robust OCR Recognition** - EasyOCR for accurate text extraction from plates
-- **🎬 Multi-Source Support** - Process images, videos, folders, or live webcam feeds
-- **📊 Advanced Video Tracking** - Track vehicles across frames with trajectory analysis
-- **🌐 Web Dashboard** - Flask-based REST API with interactive frontend
-- **📈 Analytics Dashboard** - Streamlit-powered real-time traffic analytics
-- **💾 SQLite Database** - Persistent storage for detections, alerts, and blacklists
-- **🚀 GPU Acceleration** - CUDA support for faster inference (fallback to CPU)
-- **📱 Easy Configuration** - JSON-based camera and blacklist management
-- **🔄 Batch Processing** - Process multiple images/videos efficiently
+## 🏛️ System Architecture Pipeline (Phases 1–10)
+
+```text
+  [Multi-Camera RTSP Streams: CAM-001 .. CAM-004]
+                         │
+                         ▼
+        [Phase 1: Ingestion & Looping Core]
+                         │
+                         ▼
+       [Phase 2: YOLO Vehicle Object Detection]
+                         │
+                         ▼
+       [Phase 3: ByteTrack Multi-Target Tracking]
+                         │
+        ┌────────────────┴────────────────┐
+        ▼                                 ▼
+[Phase 4: ANPR & Consensus]    [Phase 5: ReID 512-D Embedding]
+        └────────────────┬────────────────┘
+                         │
+                         ▼
+      [Phase 6: Global Vehicle Identity Resolution]
+                         │
+        ┌────────────────┴────────────────┐
+        ▼                                 ▼
+[Phase 7A: Trajectory Graph]   [Phase 7B/7C: Speed & LOS Congestion]
+        └────────────────┬────────────────┘
+                         │
+                         ▼
+    [Phase 7E: Multi-Rule Security Alert Engine]
+  (Watchlist, Kinematic Diagnostic >140km/h, Loitering)
+                         │
+                         ▼
+   [Phase 8: Multi-Worker Supervisor & Concurrency]
+                         │
+                         ▼
+  [Phase 9B: Cryptographic SHA-256 Evidence Manifest]
+      (Persisted Crop JPEGs, JSON, CSV & PDF Dossiers)
+                         │
+                         ▼
+[Phase 10: Competition Demonstration & Dashboard Center]
+```
+
+---
+
+## ⚡ Quick Start & Competition Demonstration
+
+### 1. Execute One-Command Live SIH Demonstration
+```powershell
+# Run the complete end-to-end competition demonstration harness:
+python scripts/demo_sih2026.py
+
+# Run rapid dry-run self-test:
+python scripts/demo_sih2026.py --dry-run
+```
+
+This automated runner verifies:
+- Multi-camera feed simulation
+- Synthetic security scenario evaluation (Watchlist, Kinematic Bound >140 km/h, Dwell)
+- Trajectory reconstruction & Level of Service (LOS) congestion
+- Publication-quality PDF, JSON, and CSV e-Challan dossier export under `results/demo/`
+- **Real-World Tamper Proof**: Modifies 1 byte in a persisted crop JPEG and proves that `verify_evidence_manifest()` cryptographically fails, then restores it cleanly
+- Non-blocking zero-math REST API audit
+
+### 2. Launch Live Command Center Web Dashboard
+```powershell
+python app.py
+```
+Open **http://127.0.0.1:5000** to access the three operational layers:
+- **Layer 1: Interactive GIS Traffic Map** (Topological camera graph & congestion overlay)
+- **Layer 2: Network Analytics Dashboard** (Corridor speeds, TTI, travel times)
+- **Layer 3: Vehicle Search & Trajectory Explorer** (Multi-hop sightings & dossier download)
+- **Command Center: Threat Alerts & Watchlist Manager** (e-Challan PDF downloads)
+
+---
+
+## 🎯 Key Features by Phase
+
+- **Phase 1 (Streaming)**: Multi-camera RTSP ingestion (`CameraSource`) with reconnect logic.
+- **Phase 2 (Detection)**: YOLOv8 vehicle detection for Indian road conditions.
+- **Phase 3 (Tracking)**: ByteTrack association tracking individual vehicle trajectories.
+- **Phase 4 (ANPR)**: Plate crop quality gate, EasyOCR, and multi-read consensus.
+- **Phase 5 (ReID)**: Deep appearance visual embeddings (strictly $L_2$-normalized 512-D).
+- **Phase 6 (Global Identity)**: Cross-camera identity resolution fusing plates and visual ReID.
+- **Phase 7A-7C (Analytics)**: Corridor speed calculation, flow modeling, and Level of Service (LOS).
+- **Phase 7D (GIS Presentation)**: Leaflet/Folium interactive map overlay with road geometry.
+- **Phase 7E (Security Alerts)**: Real-time watchlist detection and diagnostic plausibility flags.
+- **Phase 8 (Orchestration)**: Thread-isolated SQLite concurrency (WAL), health monitor, auto-restarts.
+- **Phase 9A (Validation)**: Sustained 4-camera live validation with fault injection.
+- **Phase 9B (Evidence & Dossiers)**: Tamper-evident SHA-256 manifests and ReportLab PDF dossiers.
+- **Phase 10 (Demonstration)**: Turnkey competition demonstration and verified benchmarks.
+
+---
+
+## 🌐 REST API Endpoints (`/api/v1/`)
+
+| Endpoint | Method | Description |
+|---|:---:|---|
+| `/api/v1/system/health` | `GET` | System health status, supervisor uptime, aggregate FPS, and active workers |
+| `/api/v1/system/cameras` | `GET` | Live telemetry for all camera nodes (FPS, latency, status, detection counts) |
+| `/api/v1/vehicles/search?q={query}` | `GET` | Search vehicle by license plate or Global ID (`GV-XXXXXX`) |
+| `/api/v1/vehicles/trajectory/{id}` | `GET` | Retrieve chronological sighting hops and GeoJSON trajectory |
+| `/api/v1/alerts` | `GET` | Filtered surveillance alerts feed (by severity, unacknowledged, camera) |
+| `/api/v1/alerts/{id}/acknowledge` | `POST` | Acknowledge alert with operator audit trail |
+| `/api/v1/blacklist` | `GET` / `POST` | Retrieve or register vehicle on active law enforcement watchlist |
+| `/api/v1/evidence/alerts/{id}` | `GET` | Retrieve structured evidence record and SHA-256 manifest for alert |
+| `/api/v1/evidence/alerts/{id}/download` | `GET` | Download tamper-evident dossier (`?format=pdf\|json\|csv`) |
+| `/api/v1/evidence/vehicles/{id}` | `GET` | Retrieve multi-camera trajectory evidence record and manifest |
+| `/api/v1/evidence/vehicles/{id}/download` | `GET` | Download vehicle movement dossier (`?format=pdf\|json\|csv`) |
+
+---
 
 ## 📋 System Requirements
+
 
 ### Minimum Requirements
 - **OS**: Windows, Linux, or macOS
