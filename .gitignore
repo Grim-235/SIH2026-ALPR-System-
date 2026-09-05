@@ -82,6 +82,7 @@ temp/
 # Results and Outputs (keep structure, ignore large files)
 results/*
 !results/.gitkeep
+inputs/*.mp4
 
 # Database
 *.db
@@ -110,3 +111,7 @@ instance/
 .pytest_cache/
 .coverage
 htmlcov/
+data/evidence/
+Source data/
+scratch/
+*.zip

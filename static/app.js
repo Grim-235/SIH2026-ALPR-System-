@@ -398,6 +398,30 @@ function initVehicleSearch() {
             performVehicleSearch(q);
         });
     });
+
+    // Phase 9B: Export Vehicle Dossier Listeners
+    const expPdfBtn = document.getElementById('exportVehiclePdfBtn');
+    const expJsonBtn = document.getElementById('exportVehicleJsonBtn');
+    const expCsvBtn = document.getElementById('exportVehicleCsvBtn');
+
+    if (expPdfBtn) {
+        expPdfBtn.addEventListener('click', () => {
+            const gid = document.getElementById('dossierGlobalId')?.textContent;
+            if (gid && gid !== '--') downloadEvidenceDossier('vehicles', gid, 'pdf');
+        });
+    }
+    if (expJsonBtn) {
+        expJsonBtn.addEventListener('click', () => {
+            const gid = document.getElementById('dossierGlobalId')?.textContent;
+            if (gid && gid !== '--') downloadEvidenceDossier('vehicles', gid, 'json');
+        });
+    }
+    if (expCsvBtn) {
+        expCsvBtn.addEventListener('click', () => {
+            const gid = document.getElementById('dossierGlobalId')?.textContent;
+            if (gid && gid !== '--') downloadEvidenceDossier('vehicles', gid, 'csv');
+        });
+    }
 }
 
 async function performVehicleSearch(query) {
@@ -1064,6 +1088,17 @@ async function loadAlerts() {
                 ? `<span class="text-text-muted text-[10px] font-semibold bg-surface-subtle px-1.5 py-0.5 rounded border border-border-light">Acked</span>`
                 : `<button onclick="ackAlert('${a.alert_id}')" class="px-2 py-0.5 rounded bg-primary text-white text-[10px] font-semibold hover:bg-primary-hover shadow-xs">Ack</button>`;
 
+            const dossierBtns = `
+                <div class="flex items-center justify-end gap-1 mt-1">
+                    <button onclick="downloadEvidenceDossier('alerts', '${a.alert_id}', 'pdf')" class="px-1.5 py-0.5 rounded bg-surface border border-border-light text-text-main text-[10px] font-semibold hover:bg-surface-subtle flex items-center gap-0.5" title="Download e-Challan PDF Dossier">
+                        <span class="material-symbols-outlined text-[12px] text-error">picture_as_pdf</span> PDF
+                    </button>
+                    <button onclick="downloadEvidenceDossier('alerts', '${a.alert_id}', 'json')" class="px-1.5 py-0.5 rounded bg-surface border border-border-light text-text-muted text-[10px] font-mono hover:text-text-main" title="Download JSON Manifest">
+                        JSON
+                    </button>
+                </div>
+            `;
+
             const timeStr = a.iso_timestamp ? a.iso_timestamp.replace('T', ' ').replace('Z', '') : '--';
 
             return `
@@ -1084,6 +1119,7 @@ async function loadAlerts() {
                     <td class="py-2.5 px-3 font-mono text-[10px] text-text-muted">${timeStr}</td>
                     <td class="py-2.5 px-3 text-right">
                         ${ackBtn}
+                        ${dossierBtns}
                     </td>
                 </tr>
             `;
@@ -1113,5 +1149,19 @@ function jumpToTrajectory(identifier) {
     const pInput = document.getElementById('plateSearchInput');
     if (pInput) pInput.value = identifier;
     performVehicleSearch(identifier);
+}
+
+// ---------------------------------------------------------------------------
+// 9. PHASE 9B: Evidence & e-Challan Dossier Exporter Helper
+// ---------------------------------------------------------------------------
+function downloadEvidenceDossier(endpointType, identifier, format = 'pdf') {
+    if (!identifier) return;
+    const url = `/api/v1/evidence/${encodeURIComponent(endpointType)}/${encodeURIComponent(identifier)}/download?format=${encodeURIComponent(format)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
 }
 

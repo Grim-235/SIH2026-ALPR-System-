@@ -104,6 +104,8 @@ class VehicleObservation:
     best_reid_embedding: Optional[np.ndarray] = None
     crop_quality: float = 0.0
     bbox: Optional[Tuple[int, int, int, int]] = None
+    vehicle_crop_path: Optional[str] = None
+    plate_crop_path: Optional[str] = None
 
 
 @dataclass

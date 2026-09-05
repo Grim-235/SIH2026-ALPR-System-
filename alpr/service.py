@@ -43,6 +43,11 @@ from alpr.trajectory import (
     TrajectoryReconstructor,
     get_reconstructor,
 )
+from alpr.evidence import (
+    EvidenceRecord,
+    EvidenceCollector,
+    DossierExporter,
+)
 from alpr.analytics import (
     NetworkAnalyticsReport,
     CorridorAnalyticsEngine,
@@ -625,6 +630,67 @@ class DashboardService:
         finally:
             if conn is None:
                 c.close()
+
+    # ── Phase 9B: Evidence Dossier & Cryptographic Manifest Services ──
+
+    def get_alert_evidence(
+        self,
+        alert_id: str,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> Optional[EvidenceRecord]:
+        """Collect tamper-evident evidence dossier record for a specific alert."""
+        c = conn or self._get_connection()
+        try:
+            collector = EvidenceCollector(
+                base_dir=self.db_path.parent.parent if self.db_path.parent.name == "data" else Path.cwd(),
+                cameras_path=self.cameras_path,
+                camera_graph_path=self.camera_graph_path,
+            )
+            return collector.collect_for_alert(c, alert_id)
+        finally:
+            if conn is None:
+                c.close()
+
+    def get_vehicle_evidence(
+        self,
+        global_id: str,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> Optional[EvidenceRecord]:
+        """Collect complete multi-camera trajectory evidence dossier for a global vehicle identity."""
+        c = conn or self._get_connection()
+        try:
+            collector = EvidenceCollector(
+                base_dir=self.db_path.parent.parent if self.db_path.parent.name == "data" else Path.cwd(),
+                cameras_path=self.cameras_path,
+                camera_graph_path=self.camera_graph_path,
+            )
+            return collector.collect_for_vehicle(c, global_id)
+        finally:
+            if conn is None:
+                c.close()
+
+    def export_dossier(
+        self,
+        record: EvidenceRecord,
+        export_format: str = "pdf",
+    ) -> Tuple[Union[bytes, str], str, str]:
+        """
+        Export EvidenceRecord to requested format (pdf, json, csv).
+        Returns (content, mime_type, filename).
+        """
+        fmt = (export_format or "pdf").lower().strip()
+        safe_id = re.sub(r"[^A-Za-z0-9_\-]", "_", record.incident_id)
+
+        if fmt == "json":
+            content = DossierExporter.export_json(record)
+            return content, "application/json", f"dossier_{safe_id}.json"
+        elif fmt == "csv":
+            content = DossierExporter.export_csv(record)
+            return content, "text/csv", f"dossier_{safe_id}.csv"
+        else:
+            base_dir = self.db_path.parent.parent if self.db_path.parent.name == "data" else Path.cwd()
+            pdf_bytes = DossierExporter.export_pdf(record, base_dir=base_dir)
+            return pdf_bytes, "application/pdf", f"dossier_{safe_id}.pdf"
 
 
 # Module-level singleton

@@ -127,12 +127,24 @@ def init_db(db_path: str | Path) -> sqlite3.Connection:
             transit_speed_kmh       REAL,
             distance_km             REAL,
             match_reason            TEXT,
+            vehicle_crop_path       TEXT,
+            plate_crop_path         TEXT,
             created_at              TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (global_id) REFERENCES global_vehicles(global_id),
             FOREIGN KEY (camera_id) REFERENCES cameras(camera_id),
             UNIQUE (camera_id, local_track_id)
         )
     """)
+
+    # Phase 9B: Evidence crop paths migration
+    try:
+        cursor.execute("ALTER TABLE vehicle_observations ADD COLUMN vehicle_crop_path TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE vehicle_observations ADD COLUMN plate_crop_path TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_plate ON detections(plate_text)"
@@ -913,6 +925,9 @@ def record_vehicle_observation(
     if obs.bbox is not None and len(obs.bbox) == 4:
         bbox_x1, bbox_y1, bbox_x2, bbox_y2 = (int(v) for v in obs.bbox)
 
+    v_crop = getattr(obs, "vehicle_crop_path", None)
+    p_crop = getattr(obs, "plate_crop_path", None)
+
     def _do_record():
         cursor = conn.cursor()
         cursor.execute(
@@ -922,8 +937,9 @@ def record_vehicle_observation(
                 vehicle_type, canonical_plate, plate_confidence, crop_quality,
                 reid_embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2,
                 match_status, match_confidence, match_method, plate_similarity,
-                reid_similarity, transit_speed_kmh, distance_km, match_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reid_similarity, transit_speed_kmh, distance_km, match_reason,
+                vehicle_crop_path, plate_crop_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(camera_id, local_track_id) DO UPDATE SET
                 global_id = excluded.global_id,
                 last_timestamp = excluded.last_timestamp,
@@ -938,7 +954,9 @@ def record_vehicle_observation(
                 reid_similarity = excluded.reid_similarity,
                 transit_speed_kmh = excluded.transit_speed_kmh,
                 distance_km = excluded.distance_km,
-                match_reason = excluded.match_reason
+                match_reason = excluded.match_reason,
+                vehicle_crop_path = COALESCE(excluded.vehicle_crop_path, vehicle_observations.vehicle_crop_path),
+                plate_crop_path = COALESCE(excluded.plate_crop_path, vehicle_observations.plate_crop_path)
             """,
             (
                 match_result.global_id,
@@ -963,6 +981,8 @@ def record_vehicle_observation(
                 float(match_result.transit_speed_kmh) if match_result.transit_speed_kmh is not None else None,
                 float(match_result.distance_km) if match_result.distance_km is not None else None,
                 match_result.reason,
+                v_crop,
+                p_crop,
             ),
         )
         conn.commit()

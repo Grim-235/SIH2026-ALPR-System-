@@ -2,6 +2,7 @@
 """Flask backend for ANPR Intelligence Dashboard"""
 from flask import Flask, render_template, request, jsonify, send_file, Response
 from flask_cors import CORS
+import io
 import json
 import tempfile
 import subprocess
@@ -483,6 +484,71 @@ def api_create_camera():
     cam_id = f"CAM_{data['name'].upper().replace(' ', '_')[:10]}"
     upsert_camera(conn, cam_id, data['name'], data['lat'], data['lon'], data.get('description'))
     return jsonify({'camera_id': cam_id, 'success': True})
+
+# ============================================================================
+# PHASE 9B: EVIDENCE DOSSIER & CRYPTOGRAPHIC MANIFEST REST API
+# ============================================================================
+
+@app.route('/api/v1/evidence/alerts/<alert_id>', methods=['GET'])
+@app.route('/api/evidence/alerts/<alert_id>', methods=['GET'])
+def api_evidence_alert(alert_id):
+    """Retrieve structured evidence record and SHA-256 manifest for a security alert."""
+    record = dashboard_service.get_alert_evidence(alert_id, conn=conn)
+    if not record:
+        return jsonify({'error': f'Alert not found or no evidence available for: {alert_id}'}), 404
+    return jsonify(record.to_dict())
+
+@app.route('/api/v1/evidence/alerts/<alert_id>/download', methods=['GET'])
+@app.route('/api/evidence/alerts/<alert_id>/download', methods=['GET'])
+def api_evidence_alert_download(alert_id):
+    """Download evidence dossier in PDF, JSON, or CSV format."""
+    record = dashboard_service.get_alert_evidence(alert_id, conn=conn)
+    if not record:
+        return jsonify({'error': f'Alert not found or no evidence available for: {alert_id}'}), 404
+    fmt = request.args.get('format', 'pdf').lower().strip()
+    content, mimetype, filename = dashboard_service.export_dossier(record, export_format=fmt)
+    if isinstance(content, bytes):
+        return send_file(io.BytesIO(content), mimetype=mimetype, as_attachment=True, download_name=filename)
+    return Response(content, mimetype=mimetype, headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+@app.route('/api/v1/evidence/vehicles/<identifier>', methods=['GET'])
+@app.route('/api/evidence/vehicles/<identifier>', methods=['GET'])
+def api_evidence_vehicle(identifier):
+    """Retrieve multi-camera trajectory evidence record and SHA-256 manifest for a vehicle."""
+    # Resolve plate or global ID
+    target_gid = identifier
+    if not identifier.startswith('GV-'):
+        veh = get_global_vehicle_by_plate(conn, identifier)
+        if veh:
+            target_gid = veh['global_id']
+        else:
+            return jsonify({'error': f'Vehicle not found: {identifier}'}), 404
+
+    record = dashboard_service.get_vehicle_evidence(target_gid, conn=conn)
+    if not record:
+        return jsonify({'error': f'No trajectory evidence found for vehicle: {identifier}'}), 404
+    return jsonify(record.to_dict())
+
+@app.route('/api/v1/evidence/vehicles/<identifier>/download', methods=['GET'])
+@app.route('/api/evidence/vehicles/<identifier>/download', methods=['GET'])
+def api_evidence_vehicle_download(identifier):
+    """Download vehicle trajectory dossier in PDF, JSON, or CSV format."""
+    target_gid = identifier
+    if not identifier.startswith('GV-'):
+        veh = get_global_vehicle_by_plate(conn, identifier)
+        if veh:
+            target_gid = veh['global_id']
+        else:
+            return jsonify({'error': f'Vehicle not found: {identifier}'}), 404
+
+    record = dashboard_service.get_vehicle_evidence(target_gid, conn=conn)
+    if not record:
+        return jsonify({'error': f'No trajectory evidence found for vehicle: {identifier}'}), 404
+    fmt = request.args.get('format', 'pdf').lower().strip()
+    content, mimetype, filename = dashboard_service.export_dossier(record, export_format=fmt)
+    if isinstance(content, bytes):
+        return send_file(io.BytesIO(content), mimetype=mimetype, as_attachment=True, download_name=filename)
+    return Response(content, mimetype=mimetype, headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
 if __name__ == '__main__':
     app.run(debug=False, use_reloader=False, host='127.0.0.1', port=5000)

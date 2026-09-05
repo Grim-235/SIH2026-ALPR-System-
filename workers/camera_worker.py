@@ -217,6 +217,28 @@ class CameraWorker:
         if self.identity_resolver is None:
             return
 
+        # Phase 9B: Persist best vehicle and plate crops as evidence snapshots
+        vehicle_crop_path = None
+        plate_crop_path = None
+        try:
+            crops_dir = Path("data/evidence/crops")
+            crops_dir.mkdir(parents=True, exist_ok=True)
+            import cv2
+
+            if trk.best_vehicle_crop is not None and isinstance(trk.best_vehicle_crop, np.ndarray) and trk.best_vehicle_crop.size > 0:
+                rel_vpath = f"data/evidence/crops/{self.camera_id}_{trk.track_id}_veh.jpg"
+                full_vpath = crops_dir / f"{self.camera_id}_{trk.track_id}_veh.jpg"
+                if cv2.imwrite(str(full_vpath), trk.best_vehicle_crop):
+                    vehicle_crop_path = rel_vpath
+
+            if trk.best_plate_crop is not None and isinstance(trk.best_plate_crop, np.ndarray) and trk.best_plate_crop.size > 0:
+                rel_ppath = f"data/evidence/crops/{self.camera_id}_{trk.track_id}_plate.jpg"
+                full_ppath = crops_dir / f"{self.camera_id}_{trk.track_id}_plate.jpg"
+                if cv2.imwrite(str(full_ppath), trk.best_plate_crop):
+                    plate_crop_path = rel_ppath
+        except Exception as crop_err:
+            logger.debug(f"[{self.camera_id}] Error saving evidence crops: {crop_err}")
+
         obs = VehicleObservation(
             camera_id=self.camera_id,
             track_id=trk.track_id,
@@ -227,6 +249,8 @@ class CameraWorker:
             best_reid_embedding=trk.best_reid_embedding,
             crop_quality=trk.best_crop_quality,
             bbox=trk.latest_bbox,
+            vehicle_crop_path=vehicle_crop_path,
+            plate_crop_path=plate_crop_path,
         )
 
         identity, result = self.identity_resolver.resolve_observation(obs)

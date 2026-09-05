@@ -498,6 +498,22 @@
                                     <span id="dossierAvgSpeed" class="font-bold text-secondary">--</span>
                                 </div>
                             </div>
+
+                            <!-- Phase 9B: Export Dossier Actions -->
+                            <div class="pt-2 border-t border-border-light flex gap-2">
+                                <button id="exportVehiclePdfBtn" class="flex-1 py-1.5 rounded bg-primary text-white font-semibold text-[11px] shadow-sm hover:bg-primary-hover flex items-center justify-center gap-1">
+                                    <span class="material-symbols-outlined text-sm">picture_as_pdf</span>
+                                    <span>Export PDF</span>
+                                </button>
+                                <button id="exportVehicleJsonBtn" class="px-2.5 py-1.5 rounded bg-surface border border-border-light text-text-main font-semibold text-[11px] hover:bg-surface-subtle flex items-center justify-center gap-1" title="Download SHA-256 Manifest JSON">
+                                    <span class="material-symbols-outlined text-sm">data_object</span>
+                                    <span>JSON</span>
+                                </button>
+                                <button id="exportVehicleCsvBtn" class="px-2.5 py-1.5 rounded bg-surface border border-border-light text-text-main font-semibold text-[11px] hover:bg-surface-subtle flex items-center justify-center gap-1" title="Download CSV Audit Record">
+                                    <span class="material-symbols-outlined text-sm">table_view</span>
+                                    <span>CSV</span>
+                                </button>
+                            </div>
                         </div>
 
                         <!-- ReID Diagnostics Card -->
