@@ -255,17 +255,11 @@ def api_upload_video():
     job_id = str(uuid.uuid4())[:8]
     create_job(conn, job_id, camera_id, tmp_path, total_frames)
     
-    # Spawn worker using available python interpreter (preferring virtualenv if present)
+    # Spawn worker using active python interpreter (or local .venv if present)
     py_exec = sys.executable
-    possible_venvs = [
-        Path(__file__).parent / ".venv" / "Scripts" / "python.exe",
-        Path(__file__).parent.parent / "Modern-Indian-ALPR" / ".venv" / "Scripts" / "python.exe",
-        Path("d:/SIH2026/Modern-Indian-ALPR/.venv/Scripts/python.exe"),
-    ]
-    for venv_py in possible_venvs:
-        if venv_py.exists():
-            py_exec = str(venv_py.resolve())
-            break
+    local_venv = Path(__file__).parent / ".venv" / "Scripts" / "python.exe"
+    if local_venv.exists():
+        py_exec = str(local_venv.resolve())
 
     worker_script_path = Path(__file__).parent / "worker.py"
     if not worker_script_path.exists():

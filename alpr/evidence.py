@@ -26,20 +26,24 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 # ReportLab imports for PDF generation
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import inch
-from reportlab.platypus import (
-    HRFlowable,
-    Image as RLImage,
-    KeepTogether,
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-    Table,
-    TableStyle,
-)
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (
+        HRFlowable,
+        Image as RLImage,
+        KeepTogether,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
 
 logger = logging.getLogger("alpr.evidence")
 
@@ -547,6 +551,8 @@ class DossierExporter:
         Renders header, legal disclaimer box, dual metadata grid, embedded crop images,
         kinematic/trajectory context, and cryptographic SHA-256 signature block.
         """
+        if not HAS_REPORTLAB:
+            raise RuntimeError("ReportLab is not installed; PDF export requires reportlab.")
         buf = io.BytesIO()
         doc = SimpleDocTemplate(
             output_path if output_path else buf,
