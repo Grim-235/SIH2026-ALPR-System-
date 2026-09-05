@@ -24,6 +24,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import numpy as np
+import psutil
+
 from alpr.detector import VehicleDetector
 from alpr.tracker import VehicleTracker
 from alpr.anpr import VehicleANPR
@@ -36,6 +39,7 @@ from alpr.database import (
     update_camera_status,
     get_camera_statuses as db_get_camera_statuses,
     get_enriched_blacklist,
+    get_db_concurrency_metrics,
 )
 from workers.camera_worker import CameraWorker
 
@@ -54,12 +58,15 @@ class CameraTelemetry:
     input_fps: float = 0.0
     inference_fps: float = 0.0
     latency_ms: float = 0.0
+    p50_latency_ms: float = 0.0
+    p95_latency_ms: float = 0.0
     frames_processed: int = 0
     vehicles_detected: int = 0
     plates_detected: int = 0
     identities_resolved: int = 0
     alerts_triggered: int = 0
     restarts: int = 0
+    loop_count: int = 0
     last_heartbeat: float = field(default_factory=time.time)
     thread_alive: bool = False
 
@@ -70,12 +77,15 @@ class CameraTelemetry:
             "input_fps": round(self.input_fps, 2),
             "inference_fps": round(self.inference_fps, 2),
             "latency_ms": round(self.latency_ms, 1),
+            "p50_latency_ms": round(self.p50_latency_ms, 1),
+            "p95_latency_ms": round(self.p95_latency_ms, 1),
             "frames_processed": self.frames_processed,
             "vehicles_detected": self.vehicles_detected,
             "plates_detected": self.plates_detected,
             "identities_resolved": self.identities_resolved,
             "alerts_triggered": self.alerts_triggered,
             "restarts": self.restarts,
+            "loop_count": self.loop_count,
             "thread_alive": self.thread_alive,
             "last_heartbeat": self.last_heartbeat,
         }
@@ -94,6 +104,7 @@ class PipelineOrchestrator:
         db_path: Union[str, Path] = "data/alpr.db",
         use_stream: bool = True,
         mode: str = "full-pipeline",  # 'full-pipeline', 'track', 'detect', 'ingest'
+        loop_video: bool = True,
         model_path: str = "data/models/yolov8n.pt",
         plate_model_path: str = "data/models/license_plate_yolov8_best.pt",
         tracker_type: str = "bytetrack.yaml",
@@ -113,6 +124,7 @@ class PipelineOrchestrator:
         self.db_path = Path(db_path)
         self.use_stream = use_stream
         self.mode = mode
+        self.loop_video = loop_video
         self.model_path = model_path
         self.plate_model_path = plate_model_path
         self.tracker_type = tracker_type
@@ -255,6 +267,7 @@ class PipelineOrchestrator:
             alert_engine=self.alert_engine if self.mode == "full-pipeline" else None,
             blacklist_records=bl_records,
             db_path=self.db_path,
+            loop=self.loop_video,
             on_alert_triggered=self.on_alert_triggered,
             on_global_identity_resolved=self.on_global_identity_resolved,
         )
@@ -329,17 +342,32 @@ class PipelineOrchestrator:
                     id_res = worker.identities_resolved if worker else 0
                     alt_trig = getattr(worker, "alerts_triggered", 0) if worker else 0
 
+                    p50_lat = 0.0
+                    p95_lat = 0.0
+                    if worker and hasattr(worker, "_latencies") and len(worker._latencies) > 0:
+                        lats = list(worker._latencies)
+                        p50_lat = float(np.percentile(lats, 50))
+                        p95_lat = float(np.percentile(lats, 95))
+
+                    loop_cnt = 0
+                    if worker and worker._camera and hasattr(worker._camera, "loop_count"):
+                        loop_cnt = worker._camera.loop_count
+
                     telem = self.telemetry.get(camera_id)
                     if telem:
                         telem.status = status
                         telem.input_fps = in_fps
                         telem.inference_fps = infer_fps
                         telem.latency_ms = lat_ms
+                        telem.p50_latency_ms = p50_lat
+                        telem.p95_latency_ms = p95_lat
                         telem.frames_processed = proc_frames
                         telem.vehicles_detected = veh_det
                         telem.plates_detected = plt_det
                         telem.identities_resolved = id_res
                         telem.alerts_triggered = alt_trig
+                        telem.restarts = self.worker_restarts.get(camera_id, 0)
+                        telem.loop_count = loop_cnt
                         telem.thread_alive = alive
                         telem.last_heartbeat = now
 
@@ -463,6 +491,18 @@ class PipelineOrchestrator:
             total_alerts += telem.alerts_triggered
 
         avg_latency = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
+        p50_latency = round(float(np.percentile(latencies, 50)), 1) if latencies else 0.0
+        p95_latency = round(float(np.percentile(latencies, 95)), 1) if latencies else 0.0
+
+        cpu_pct = 0.0
+        mem_mb = 0.0
+        try:
+            cpu_pct = round(psutil.cpu_percent(interval=None), 1)
+            mem_mb = round(psutil.Process().memory_info().rss / (1024 * 1024), 1)
+        except Exception:
+            pass
+
+        db_metrics = get_db_concurrency_metrics()
 
         if not self._running:
             system_status = "offline"
@@ -483,6 +523,11 @@ class PipelineOrchestrator:
             "offline_cameras": offline_cameras,
             "total_fps": round(total_fps, 2),
             "avg_latency_ms": avg_latency,
+            "p50_latency_ms": p50_latency,
+            "p95_latency_ms": p95_latency,
+            "cpu_percent": cpu_pct,
+            "memory_mb": mem_mb,
+            "db_metrics": db_metrics,
             "total_frames_processed": total_proc_frames,
             "total_vehicles_detected": total_veh_detected,
             "total_plates_detected": total_plates,
@@ -505,9 +550,12 @@ class PipelineOrchestrator:
                 "status": telem.status if telem else "offline",
                 "fps": telem.input_fps if telem else 0.0,
                 "latency_ms": telem.latency_ms if telem else 0.0,
+                "p50_latency_ms": telem.p50_latency_ms if telem else 0.0,
+                "p95_latency_ms": telem.p95_latency_ms if telem else 0.0,
                 "total_frames": telem.frames_processed if telem else 0,
                 "total_detections": telem.vehicles_detected if telem else 0,
                 "restarts": telem.restarts if telem else 0,
+                "loop_count": telem.loop_count if telem else 0,
                 "thread_alive": telem.thread_alive if telem else False,
             })
         return statuses
@@ -550,6 +598,7 @@ def main():
     parser.add_argument("--reid-every-n", type=int, default=15, help="ReID extraction throttle interval")
     parser.add_argument("--heartbeat-interval", type=float, default=2.0, help="Supervisor heartbeat frequency in seconds")
     parser.add_argument("--max-restarts", type=int, default=5, help="Maximum automatic worker restarts on drop")
+    parser.add_argument("--loop-video", action=argparse.BooleanOptionalAction, default=True, help="Loop video files upon EOF in direct mode")
 
     args = parser.parse_args()
 
@@ -559,6 +608,7 @@ def main():
         db_path=args.db_path,
         use_stream=not args.direct,
         mode=args.mode,
+        loop_video=args.loop_video,
         model_path=args.model,
         plate_model_path=args.plate_model,
         tracker_type=args.tracker,

@@ -259,6 +259,28 @@ def get_thread_connection(db_path: Union[str, Path], timeout: float = 30.0) -> s
     return conn
 
 
+_DB_METRICS_LOCK = threading.Lock()
+_DB_METRICS = {
+    "total_transactions": 0,
+    "retries": 0,
+    "lock_errors": 0,
+}
+
+
+def get_db_concurrency_metrics() -> Dict[str, int]:
+    """Retrieve copy of database concurrency and retry counters."""
+    with _DB_METRICS_LOCK:
+        return dict(_DB_METRICS)
+
+
+def reset_db_concurrency_metrics() -> None:
+    """Reset database concurrency and retry counters."""
+    with _DB_METRICS_LOCK:
+        _DB_METRICS["total_transactions"] = 0
+        _DB_METRICS["retries"] = 0
+        _DB_METRICS["lock_errors"] = 0
+
+
 def execute_with_retry(
     func: Callable[..., Any],
     *args,
@@ -272,6 +294,8 @@ def execute_with_retry(
     sqlite3.OperationalError (database locked / busy).
     """
     retries = 0
+    with _DB_METRICS_LOCK:
+        _DB_METRICS["total_transactions"] += 1
     while True:
         try:
             return func(*args, **kwargs)
@@ -279,9 +303,13 @@ def execute_with_retry(
             msg = str(e).lower()
             if ("locked" in msg or "busy" in msg) and retries < max_retries:
                 retries += 1
+                with _DB_METRICS_LOCK:
+                    _DB_METRICS["retries"] += 1
                 sleep_time = min(max_delay, base_delay * (2 ** (retries - 1)) + random.uniform(0.01, 0.05))
                 time.sleep(sleep_time)
             else:
+                with _DB_METRICS_LOCK:
+                    _DB_METRICS["lock_errors"] += 1
                 raise
 
 

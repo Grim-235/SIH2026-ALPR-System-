@@ -33,7 +33,8 @@ class CameraSource:
     """
 
     def __init__(self, source: Union[str, int], camera_id: str, fps_target: float = 0.0, 
-                 reconnect_max_retries: int = 10, reconnect_base_delay: float = 1.0):
+                 reconnect_max_retries: int = 10, reconnect_base_delay: float = 1.0,
+                 loop: bool = False):
         """
         Initialize the CameraSource.
         
@@ -43,12 +44,15 @@ class CameraSource:
             fps_target: If > 0, throttle frame reads to this FPS.
             reconnect_max_retries: Max reconnection attempts before giving up.
             reconnect_base_delay: Initial delay for exponential backoff reconnection.
+            loop: If True and source is a video file, rewind to beginning upon reaching EOF.
         """
         self.source = source
         self.camera_id = camera_id
         self.fps_target = fps_target
         self.reconnect_max_retries = reconnect_max_retries
         self.reconnect_base_delay = reconnect_base_delay
+        self.loop = loop
+        self.loop_count = 0
 
         self._cap: Optional[cv2.VideoCapture] = None
         self._lock = threading.Lock()
@@ -163,6 +167,13 @@ class CameraSource:
                     return False, None, 0.0
                 ret, frame = self._cap.read()
                 capture_timestamp = time.time()
+                # If file reached EOF and looping is enabled, rewind to beginning
+                if (not ret or frame is None) and not self.is_stream and self.loop:
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret, frame = self._cap.read()
+                    if ret and frame is not None:
+                        self.loop_count += 1
+                        capture_timestamp = time.time()
             except Exception as e:
                 logger.error(f"[{self.camera_id}] Exception reading frame: {e}")
                 ret = False

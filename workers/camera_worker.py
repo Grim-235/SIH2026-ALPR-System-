@@ -93,6 +93,7 @@ class CameraWorker:
         alert_engine: Optional[AlertEngine] = None,
         blacklist_records: Optional[List[Dict[str, Any]]] = None,
         db_path: Optional[Union[str, Path]] = None,
+        loop: bool = False,
         on_detections: Optional[Callable[[str, np.ndarray, List[VehicleDetection], float, float], None]] = None,
         on_tracks: Optional[Callable[[str, np.ndarray, List[ActiveVehicleTrack], float, float], None]] = None,
         on_plate_read: Optional[Callable[[str, int, PlateRead], None]] = None,
@@ -117,6 +118,7 @@ class CameraWorker:
             alert_engine: Optional AlertEngine instance for online threat & anomaly diagnostics.
             blacklist_records: Optional pre-loaded watchlist records.
             db_path: Optional path to SQLite database for persisting global identities.
+            loop: If True and source is a video file, continuous loop playback.
             on_detections: Optional callback(camera_id, frame, detections, latency_ms, capture_ts).
             on_tracks: Optional callback(camera_id, frame, active_tracks, latency_ms, capture_ts).
             on_plate_read: Optional callback(camera_id, track_id, plate_read).
@@ -137,6 +139,7 @@ class CameraWorker:
         self.alert_engine = alert_engine
         self.blacklist_records = blacklist_records
         self.db_path = db_path
+        self.loop = loop
         self.on_detections = on_detections
         self.on_tracks = on_tracks
         self.on_plate_read = on_plate_read
@@ -355,6 +358,7 @@ class CameraWorker:
             camera_id=self.camera_id,
             fps_target=self.fps_target,
             reconnect_max_retries=self.reconnect_max_retries,
+            loop=self.loop,
         )
 
         if not self._camera.connect():
@@ -489,6 +493,11 @@ class CameraWorker:
                             except Exception as cb_err:
                                 logger.error(f"[{self.camera_id}] Callback error: {cb_err}")
 
+                    else:
+                        # Frame ingestion only mode
+                        self.frames_processed += 1
+                        self._proc_times.append(time.time())
+
                     self._log_stats_if_due()
                 else:
                     if not self._running or self._camera is None:
@@ -496,6 +505,9 @@ class CameraWorker:
                     consecutive_failures += 1
 
                     if not cam.is_stream:
+                        if getattr(cam, "loop", False):
+                            time.sleep(0.01)
+                            continue
                         # File ended (MP4 finished)
                         logger.info(
                             f"[{self.camera_id}] Source exhausted (file ended). "
