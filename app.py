@@ -267,7 +267,10 @@ def api_upload_video():
             py_exec = str(venv_py.resolve())
             break
 
-    worker_script = str((Path(__file__).parent / "worker.py").resolve())
+    worker_script_path = Path(__file__).parent / "worker.py"
+    if not worker_script_path.exists():
+        worker_script_path = Path(__file__).parent / "legacy" / "worker.py"
+    worker_script = str(worker_script_path.resolve())
     db_abs_path = str(DB_PATH.resolve())
     video_abs_path = str(Path(tmp_path).resolve())
     logs_dir = Path("data/logs")
